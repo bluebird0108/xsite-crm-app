@@ -7,7 +7,8 @@ const root = document.getElementById("root");
 const state = {
   profile: null,
   screen: "dashboard",
-  agents: [], deals: [], commission: [], cash: [],
+  authMode: "signin",
+  agents: [], deals: [], commission: [], cash: [], team: [],
   selectedAgent: null,
   txQuery: "", txType: "All", ledgerQuery: "",
 };
@@ -26,23 +27,26 @@ const roleIn = (...r) => r.includes(state.profile?.role);
 
 // ── data ─────────────────────────────────────────────────
 async function loadData() {
-  const [ag, dl, cm, ch] = await Promise.all([
+  if (roleIn("pending")) { state.agents = []; state.deals = []; state.commission = []; state.cash = []; state.team = []; return; }
+  const [ag, dl, cm, ch, tm] = await Promise.all([
     supabase.from("agents").select("*").order("name"),
     supabase.from("deals").select("*").order("sno"),
     supabase.from("commission_entries").select("*").order("agent_name"),
     roleIn("owner", "accounts") ? supabase.from("cash_position").select("*").order("sort_order") : Promise.resolve({ data: [] }),
+    roleIn("owner") ? supabase.from("profiles").select("*").order("created_at") : Promise.resolve({ data: [] }),
   ]);
   state.agents = ag.data || [];
   state.deals = dl.data || [];
   state.commission = cm.data || [];
   state.cash = ch.data || [];
+  state.team = tm.data || [];
 }
 
 // ── auth ─────────────────────────────────────────────────
 async function resolveProfile(session) {
   if (!session) { state.profile = null; return; }
   const { data } = await supabase.from("profiles").select("role, agent_name, full_name").eq("id", session.user.id).maybeSingle();
-  state.profile = data ? { ...data, email: session.user.email } : { role: "agent", agent_name: null, full_name: "", email: session.user.email };
+  state.profile = data ? { ...data, email: session.user.email } : { role: "pending", agent_name: null, full_name: "", email: session.user.email };
 }
 
 async function boot() {
@@ -66,40 +70,68 @@ function renderLogin(msg) {
       </div>
       <div class="login-access">
         <span class="login-kicker">Private business system</span>
-        <h1 class="login-title">Sign in</h1>
-        <p class="login-intro">Sign in with your work email and password.</p>
+        <h1 class="login-title">${state.authMode === "signup" ? "Create account" : "Sign in"}</h1>
+        <p class="login-intro">${state.authMode === "signup"
+          ? "Register with your work email. The owner approves your access and assigns your role."
+          : "Sign in with your work email and password."}</p>
+        ${state.authMode === "signup" ? `
+        <div class="login-field" style="margin-bottom:14px">
+          <label for="fullname">Full name</label>
+          <input class="input" id="fullname" type="text" autocomplete="name" placeholder="Your full name">
+        </div>` : ""}
         <div class="login-field">
           <label for="email">Work email</label>
           <input class="input" id="email" type="email" autocomplete="email" placeholder="you@xsite.example">
         </div>
         <div class="login-field" style="margin-top:14px">
           <label for="password">Password</label>
-          <input class="input" id="password" type="password" autocomplete="current-password" placeholder="Your password">
+          <input class="input" id="password" type="password" autocomplete="${state.authMode === "signup" ? "new-password" : "current-password"}" placeholder="${state.authMode === "signup" ? "Choose a password (min 8 characters)" : "Your password"}">
         </div>
         <div class="login-actions">
-          <button class="btn btn-primary" id="signin" style="width:100%">Sign in</button>
+          <button class="btn btn-primary" id="authgo" style="width:100%">${state.authMode === "signup" ? "Create account" : "Sign in"}</button>
         </div>
-        <p class="login-msg" style="margin-top:14px"><a id="send" style="cursor:pointer">Email me a sign-in link instead</a></p>
+        <p class="login-msg" style="margin-top:14px">
+          ${state.authMode === "signup"
+            ? `Already registered? <a id="switchmode" style="cursor:pointer">Sign in</a>`
+            : `New team member? <a id="switchmode" style="cursor:pointer">Create your account</a> · <a id="send" style="cursor:pointer">Email me a sign-in link</a>`}
+        </p>
         <p class="login-msg ${msg ? msg.kind : ""}" id="msg">${msg ? esc(msg.text) : ""}</p>
         <p class="login-security-note">Authorized Xsite personnel only · Dubai, UAE</p>
       </div>
     </div>
   </div>`;
-  const remembered = { email: document.getElementById("email") };
-  document.getElementById("signin").onclick = signInPassword;
-  document.getElementById("send").onclick = sendLink;
-  document.getElementById("password").addEventListener("keydown", (e) => { if (e.key === "Enter") signInPassword(); });
-  if (msg && msg.email) remembered.email.value = msg.email;
+  document.getElementById("authgo").onclick = state.authMode === "signup" ? signUp : signInPassword;
+  document.getElementById("switchmode").onclick = () => { state.authMode = state.authMode === "signup" ? "signin" : "signup"; renderLogin(); };
+  const send = document.getElementById("send");
+  if (send) send.onclick = sendLink;
+  document.getElementById("password").addEventListener("keydown", (e) => { if (e.key === "Enter") (state.authMode === "signup" ? signUp : signInPassword)(); });
+  if (msg && msg.email) document.getElementById("email").value = msg.email;
 }
 
 async function signInPassword() {
   const email = document.getElementById("email").value.trim();
   const password = document.getElementById("password").value;
   if (!email || !password) { renderLogin({ kind: "is-error", text: "Enter your email and password.", email }); return; }
-  const btn = document.getElementById("signin"); btn.disabled = true; btn.textContent = "Signing in…";
+  const btn = document.getElementById("authgo"); btn.disabled = true; btn.textContent = "Signing in…";
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) { renderLogin({ kind: "is-error", text: error.message, email }); return; }
   await resolveProfile(data.session); await loadData(); render();
+}
+
+async function signUp() {
+  const fullName = document.getElementById("fullname").value.trim();
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+  if (!fullName || !email || !password) { renderLogin({ kind: "is-error", text: "Enter your name, email, and a password.", email }); return; }
+  if (password.length < 8) { renderLogin({ kind: "is-error", text: "Password must be at least 8 characters.", email }); return; }
+  const btn = document.getElementById("authgo"); btn.disabled = true; btn.textContent = "Creating account…";
+  const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName } } });
+  if (error) { renderLogin({ kind: "is-error", text: error.message, email }); return; }
+  if (data.session) { await resolveProfile(data.session); await loadData(); render(); }
+  else {
+    state.authMode = "signin";
+    renderLogin({ kind: "is-ok", text: "Account created. Confirm via the email we sent, then sign in.", email });
+  }
 }
 
 async function sendLink() {
@@ -118,13 +150,16 @@ function renderApp() {
   const p = state.profile;
   const showTx = roleIn("owner", "accounts");
   const showLedger = roleIn("owner", "accounts", "admin") || p.role === "agent";
+  const showTeam = roleIn("owner");
+  const pendingTeam = state.team.filter((t) => t.role === "pending").length;
   const ledgerLabel = p.role === "agent" ? "My Ledger" : "Agent Ledgers";
   const nav = `
   <nav class="nav">
     <div class="nav-brand"><img src="./xsite-logo.png" alt="Xsite"></div>
-    ${navLink("dashboard", "Dashboard")}
+    ${roleIn("pending") ? "" : navLink("dashboard", "Dashboard")}
     ${showTx ? navLink("transactions", "Transactions") : ""}
     ${showLedger ? navLink("ledgers", ledgerLabel) : ""}
+    ${showTeam ? navLink("team", pendingTeam ? `Team (${pendingTeam})` : "Team") : ""}
     <div class="nav-right">
       <span class="tag tag-neutral">${esc(p.role)}</span>
       <span class="text-muted" style="font-size:13px">${esc(p.full_name || p.email)}</span>
@@ -132,8 +167,10 @@ function renderApp() {
     </div>
   </nav>`;
   let body = "";
-  if (state.screen === "transactions" && showTx) body = viewTransactions();
+  if (roleIn("pending")) body = viewPending();
+  else if (state.screen === "transactions" && showTx) body = viewTransactions();
   else if (state.screen === "ledgers" && showLedger) body = viewLedgers();
+  else if (state.screen === "team" && showTeam) body = viewTeam();
   else body = viewDashboard();
   root.innerHTML = nav + `<main>${body}</main>`;
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
@@ -166,6 +203,61 @@ function expiryTiers() {
     { title: "31–60 days", hint: "Prepare renewal offers", items: all.filter((x) => x.days > 30 && x.days <= 60) },
     { title: "61–90 days", hint: "Upcoming renewal pipeline", items: all.filter((x) => x.days > 60 && x.days <= 90) },
   ];
+}
+
+// ── view: pending approval ───────────────────────────────
+function viewPending() {
+  return `
+  <div class="md-dashboard">
+    <header class="md-dashboard-header">
+      <div><span class="card-kicker">Account created</span><h1 style="margin-top:4px">Awaiting approval</h1>
+      <p class="text-muted" style="margin:0">Your account is registered. The owner will approve your access and assign your role — check back soon.</p></div>
+    </header>
+    <div class="md-empty">Nothing to show yet. Once approved, your workspace appears here automatically.</div>
+  </div>`;
+}
+
+// ── view: team management (owner) ────────────────────────
+function viewTeam() {
+  const agentNames = [...new Set(state.commission.map((r) => r.agent_name))].sort();
+  const roleOpts = (cur) => ["pending", "agent", "accounts", "admin", "owner"]
+    .map((r) => `<option value="${r}" ${r === cur ? "selected" : ""}>${r}</option>`).join("");
+  const agentOpts = (cur) => `<option value="">— none —</option>` + agentNames
+    .map((n) => `<option value="${esc(n)}" ${n === cur ? "selected" : ""}>${esc(n)}</option>`).join("");
+  const rows = state.team.map((t) => `
+    <tr data-uid="${t.id}">
+      <td>${esc(t.full_name || "—")}</td>
+      <td>${esc(t.email || "—")}</td>
+      <td>${t.role === "pending" ? `<span class="tag tag-accent">pending</span>` : `<span class="tag tag-neutral">${esc(t.role)}</span>`}</td>
+      <td><select class="input" data-role style="padding:7px 10px">${roleOpts(t.role)}</select></td>
+      <td><select class="input" data-agentname style="padding:7px 10px">${agentOpts(t.agent_name)}</select></td>
+      <td><button class="btn btn-primary" data-save>Save</button></td>
+    </tr>`).join("");
+  return `
+  <div>
+    <div style="margin-bottom:20px"><span class="card-kicker">Owner / Team</span><h1 style="margin-top:4px">Team &amp; Access</h1>
+    <p class="text-muted" style="margin:0">New signups appear here as <strong>pending</strong>. Assign a role to grant access; link agents to their ledger name.</p></div>
+    <div class="sheet"><div class="sheet-hint">Everyone with an account · role changes apply immediately</div>
+    <div class="table-wrap"><table class="grid">
+      <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Assign role</th><th>Agent ledger link</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="6">No accounts yet.</td></tr>`}</tbody>
+    </table></div></div>
+    <p class="text-muted" style="font-size:12px;margin-top:10px" id="teammsg"></p>
+  </div>`;
+}
+
+async function saveTeamRow(tr) {
+  const uid = tr.dataset.uid;
+  const role = tr.querySelector("[data-role]").value;
+  const agent_name = tr.querySelector("[data-agentname]").value || null;
+  const btn = tr.querySelector("[data-save]"); btn.disabled = true; btn.textContent = "Saving…";
+  const { error } = await supabase.from("profiles").update({ role, agent_name }).eq("id", uid);
+  const msg = document.getElementById("teammsg");
+  if (error) { msg.textContent = "Could not save: " + error.message; btn.disabled = false; btn.textContent = "Save"; return; }
+  const t = state.team.find((x) => x.id === uid);
+  if (t) { t.role = role; t.agent_name = agent_name; }
+  msg.textContent = "Saved.";
+  const main = root.querySelector("main"); main.innerHTML = viewTeam(); wireScreen();
 }
 
 // ── view: dashboard ──────────────────────────────────────
@@ -329,6 +421,7 @@ function wireScreen() {
   const lq = document.getElementById("lq");
   if (lq) lq.oninput = () => { state.ledgerQuery = lq.value; rerenderLedgers(); };
   root.querySelectorAll("[data-agent]").forEach((b) => b.onclick = () => { state.selectedAgent = b.dataset.agent; rerenderLedgers(); });
+  root.querySelectorAll("[data-save]").forEach((b) => b.onclick = () => saveTeamRow(b.closest("tr")));
 }
 function rerenderTx() {
   const main = root.querySelector("main"); const focus = document.activeElement === document.getElementById("txq");
