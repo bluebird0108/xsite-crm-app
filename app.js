@@ -577,7 +577,7 @@ function contractDraftFromDeal(deal) {
     payment_mode: deal?.cheque_count ? `${deal.cheque_count} cheque(s)` : (deal?.payment_method || ""), additional_terms: "",
     details: { lessorName: deal?.landlord || "", lessorEmiratesId: "", lessorEmail: "", lessorLicenseNo: "", lessorLicensingAuthority: "",
       tenantEmiratesId: "", tenantEmail: "", tenantLicenseNo: "", tenantLicensingAuthority: "", plotNo: "", makaniNo: "",
-      buildingName: deal?.building || "", propertyNo: deal?.unit || "", propertyType: "Residential", unitType: "", propertyArea: "", location: deal?.area || "", premisesNo: "" },
+      buildingName: deal?.building || "", propertyNo: deal?.unit || "", propertyType: "Residential", contractValue: deal?.price || "", unitType: "", propertyArea: "", location: deal?.area || "", premisesNo: "" },
     addendum: { furnishing: "UNFURNISHED", premises: "", unitNo: deal?.unit || "", building: deal?.building || "", area: deal?.area || "", city: "DUBAI", customTerms: "" },
     msg: "",
   };
@@ -612,7 +612,7 @@ function viewContracts() {
     const action = task.status === "pending" && canFulfill ? `<div data-accounttask="${task.id}" style="display:flex;gap:6px;flex-wrap:wrap;align-items:end">
       <label class="field compact-field">Type<select class="input" data-tasktype><option value="invoice">Invoice</option><option value="receipt">Receipt</option></select></label>
       <label class="field compact-field">Date<input class="input" type="date" data-taskdate value="${todayIso()}"></label>
-      <label class="field compact-field">Amount<input class="input" type="number" min="0" step="0.01" data-taskamount value="${esc(contract.annual_rent)}"></label>
+      <label class="field compact-field">Amount<input class="input" type="number" min="0.01" step="0.01" data-taskamount value="${esc(contract.details?.contractValue || contract.annual_rent)}"></label>
       <label class="field compact-field">Payment<input class="input" data-taskpayment placeholder="Cheque / transfer"></label>
       <button class="btn btn-primary btn-mini" data-fulfilltask>Create</button></div>` : `<span class="tag tag-neutral">${doc ? esc(doc.doc_no) : "Completed"}</span>`;
     return `<tr><td>${esc(contract.contract_no)}</td><td>${esc(contract.tenant_name)}</td><td>${money(contract.annual_rent)}</td><td><span class="tag ${task.status === "pending" ? "tag-accent" : "tag-neutral"}">${esc(task.status)}</span></td><td>${action}</td></tr>`;
@@ -622,7 +622,7 @@ function viewContracts() {
       <div><span class="card-kicker">Tenancy operations</span><h1 style="margin-top:4px">${roleIn("agent") ? "My Tenancy Contracts" : "Contracts & Addenda"}</h1><p class="text-muted" style="margin:0">DLD contract drafts, Xsite addenda, 90-day renewals, and Accounts hand-off.</p></div>
       ${canManage ? `<button class="btn btn-primary" id="newcontract">+ New contract draft</button>` : ""}
     </div>
-    ${reminders.length ? `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Renewal reminders</h3><span class="tag tag-accent">${reminders.length} due within 90 days</span></div>
+    ${reminders.length ? `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Renewal reminders</h3><span class="tag tag-accent">${reminders.filter(({renewal})=>renewal.status==="due").length} due · ${reminders.filter(({renewal})=>renewal.status==="expired").length} expired</span></div>
       <div class="expiry-list">${reminders.map(({contract,renewal}) => `<div class="expiry-row"><div><strong>${esc(contract.contract_no)} · ${esc(contract.tenant_name)}</strong><div class="text-muted">${esc(dealLabelFor(contract.deal_group))} · ends ${showDate(contract.end_date)}</div></div><span class="${renewal.status === "expired" ? "expiry-days is-overdue" : "expiry-days"}">${renewal.status === "expired" ? `${Math.abs(renewal.days)}d overdue` : `${renewal.days}d left`}</span></div>`).join("")}</div></section>` : ""}
     ${roleIn("owner", "accounts", "admin") && state.accountTasks.length ? `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Accounts notifications</h3><span class="tag tag-accent">${state.accountTasks.filter((t)=>t.status==="pending").length} pending</span></div>
       <div class="table-wrap"><table class="grid"><thead><tr><th>Contract</th><th>Tenant</th><th>Contract value</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div></section>` : ""}
@@ -641,43 +641,52 @@ function viewContractModal() {
   if (!f) return "";
   const options = dealGroupOptions().map((o) => `<option value="${o.group}" ${o.group === f.deal_group ? "selected" : ""}>${esc(o.label)}</option>`).join("");
   const d = f.details || {}, a = f.addendum || {};
-  return `<div class="modal-backdrop"><div class="modal contract-modal" role="dialog" aria-labelledby="contracttitle">
+  return `<div class="modal-backdrop"><div class="modal contract-modal" role="dialog" aria-modal="true" aria-labelledby="contracttitle">
     <div class="modal-head"><h3 id="contracttitle">${f.id ? `Edit ${esc(f.contract_no)}` : "New tenancy contract draft"}</h3><button class="modal-close" id="contractclose" aria-label="Close">×</button></div>
     <div class="modal-body"><div class="contract-form-section"><h4>Deal and contract</h4><div class="form-grid">
       <div class="field"><label for="ct_deal">Related deal</label><select class="input" id="ct_deal">${options}</select></div>
       ${contractInput("ct_contract_date","Contract date",f.contract_date,"date")}${contractInput("ct_start","Start date",f.start_date,"date")}${contractInput("ct_end","End date",f.end_date,"date")}
       ${contractInput("ct_landlord","Landlord / owner",f.landlord_name)}${contractInput("ct_tenant","Tenant",f.tenant_name)}${contractInput("ct_owner_phone","Owner phone",f.owner_phone,"tel")}${contractInput("ct_tenant_phone","Tenant phone",f.tenant_phone,"tel")}
-      ${contractInput("ct_rent","Annual rent (AED)",f.annual_rent,"number",'min="0" step="0.01"')}${contractInput("ct_deposit","Security deposit (AED)",f.security_deposit,"number",'min="0" step="0.01"')}${contractInput("ct_payment","Payment mode",f.payment_mode)}
+      ${contractInput("ct_rent","Annual rent (AED)",f.annual_rent,"number",'min="0" step="0.01"')}${contractInput("ct_contract_value","Total contract value (AED)",d.contractValue ?? f.annual_rent,"number",'min="0" step="0.01"')}${contractInput("ct_deposit","Security deposit (AED)",f.security_deposit,"number",'min="0" step="0.01"')}${contractInput("ct_payment","Payment mode",f.payment_mode)}
     </div></div>
     <div class="contract-form-section"><h4>Official Ejari / DLD details</h4><div class="form-grid">
       ${contractInput("ct_lessor","Lessor name",d.lessorName)}${contractInput("ct_lessor_id","Lessor Emirates ID",d.lessorEmiratesId)}${contractInput("ct_lessor_email","Lessor email",d.lessorEmail,"email")}${contractInput("ct_lessor_license","Lessor company license",d.lessorLicenseNo)}${contractInput("ct_lessor_authority","Lessor licensing authority",d.lessorLicensingAuthority)}
       ${contractInput("ct_tenant_id","Tenant Emirates ID",d.tenantEmiratesId)}${contractInput("ct_tenant_email","Tenant email",d.tenantEmail,"email")}${contractInput("ct_tenant_license","Tenant company license",d.tenantLicenseNo)}${contractInput("ct_tenant_authority","Tenant licensing authority",d.tenantLicensingAuthority)}
       ${contractInput("ct_plot","Plot no.",d.plotNo)}${contractInput("ct_makani","Makani no.",d.makaniNo)}${contractInput("ct_building","Building",d.buildingName)}${contractInput("ct_unit","Property / unit no.",d.propertyNo)}
-      <div class="field"><label for="ct_property_type">Property use</label><select class="input" id="ct_property_type">${["Residential","Commercial","Industrial"].map((type)=>`<option value="${type}" ${type === (d.propertyType || "Residential") ? "selected" : ""}>${type}</option>`).join("")}</select></div>
+      <div class="field"><label for="ct_property_type">Property use</label><input class="input" id="ct_property_type" value="Residential" readonly><span class="text-muted" style="font-size:11px">The supplied Xsite addendum is residential-only.</span></div>
       ${contractInput("ct_unit_type","Unit type",d.unitType)}${contractInput("ct_area_sqm","Area (sq.m)",d.propertyArea,"number",'min="0" step="0.01"')}${contractInput("ct_location","Location",d.location)}${contractInput("ct_premises_no","Premises no. (DEWA)",d.premisesNo)}
-      <div class="field" style="grid-column:1/-1"><label for="ct_terms">Additional terms</label><textarea class="input" id="ct_terms" rows="4" maxlength="12000">${esc(f.additional_terms || "")}</textarea></div>
+      <div class="field" style="grid-column:1/-1"><label for="ct_terms">Additional terms</label><textarea class="input" id="ct_terms" rows="4" maxlength="1500">${esc(f.additional_terms || "")}</textarea><span class="text-muted" style="font-size:11px">Maximum 1,500 characters to fit the DLD terms area.</span></div>
     </div></div>
     <div class="contract-form-section"><h4>Xsite addendum</h4><div class="form-grid">
       ${contractInput("ct_furnishing","Furnishing",a.furnishing)}${contractInput("ct_add_premises","Premises description",a.premises)}${contractInput("ct_add_unit","Unit number",a.unitNo)}${contractInput("ct_add_building","Building",a.building)}${contractInput("ct_add_area","Area / community",a.area)}${contractInput("ct_add_city","City / emirate",a.city)}
-      <div class="field" style="grid-column:1/-1"><label for="ct_add_terms">Custom addendum conditions</label><textarea class="input" id="ct_add_terms" rows="5" maxlength="12000">${esc(a.customTerms || "")}</textarea></div>
+      <div class="field" style="grid-column:1/-1"><label for="ct_add_terms">Custom addendum conditions</label><textarea class="input" id="ct_add_terms" rows="5" maxlength="1000">${esc(a.customTerms || "")}</textarea><span class="text-muted" style="font-size:11px">Maximum 1,000 characters to keep signatures and footer visible.</span></div>
     </div></div>
-    <div class="modal-actions"><span class="form-msg" id="contractmsg">${esc(f.msg || "")}</span><button class="btn btn-secondary" id="contractcancel">Cancel</button><button class="btn btn-secondary" id="contractdraft">Save draft</button><button class="btn btn-primary" id="contractfinal">Finalize & notify Accounts</button></div>
+    <div class="modal-actions"><span class="form-msg" id="contractmsg" aria-live="polite">${esc(f.msg || "")}</span><button class="btn btn-secondary" id="contractcancel">Cancel</button><button class="btn btn-secondary" id="contractdraft">Save draft</button><button class="btn btn-primary" id="contractfinal">Finalize & notify Accounts</button></div>
     </div></div></div>`;
 }
 
 async function saveContract(status) {
   const value = (id) => document.getElementById(id)?.value?.trim() || "";
   const msg = document.getElementById("contractmsg");
-  if (status === "final" && !window.confirm("Finalize this contract? Final contracts cannot be edited and Accounts will be notified.")) return;
   const payload = {
     p_id: state.contractForm.id || null, p_deal_group: value("ct_deal"), p_status: status,
     p_contract_date: value("ct_contract_date"), p_start_date: value("ct_start"), p_end_date: value("ct_end"),
     p_landlord_name: value("ct_landlord"), p_tenant_name: value("ct_tenant"), p_owner_phone: value("ct_owner_phone"), p_tenant_phone: value("ct_tenant_phone"),
     p_annual_rent: Number(value("ct_rent")), p_security_deposit: Number(value("ct_deposit")), p_payment_mode: value("ct_payment"), p_additional_terms: value("ct_terms"),
-    p_details: { lessorName:value("ct_lessor"), lessorEmiratesId:value("ct_lessor_id"), lessorEmail:value("ct_lessor_email"), lessorLicenseNo:value("ct_lessor_license"), lessorLicensingAuthority:value("ct_lessor_authority"), tenantEmiratesId:value("ct_tenant_id"), tenantEmail:value("ct_tenant_email"), tenantLicenseNo:value("ct_tenant_license"), tenantLicensingAuthority:value("ct_tenant_authority"), plotNo:value("ct_plot"), makaniNo:value("ct_makani"), buildingName:value("ct_building"), propertyNo:value("ct_unit"), propertyType:value("ct_property_type"), unitType:value("ct_unit_type"), propertyArea:value("ct_area_sqm"), location:value("ct_location"), premisesNo:value("ct_premises_no") },
+    p_details: { lessorName:value("ct_lessor"), lessorEmiratesId:value("ct_lessor_id"), lessorEmail:value("ct_lessor_email"), lessorLicenseNo:value("ct_lessor_license"), lessorLicensingAuthority:value("ct_lessor_authority"), tenantEmiratesId:value("ct_tenant_id"), tenantEmail:value("ct_tenant_email"), tenantLicenseNo:value("ct_tenant_license"), tenantLicensingAuthority:value("ct_tenant_authority"), plotNo:value("ct_plot"), makaniNo:value("ct_makani"), buildingName:value("ct_building"), propertyNo:value("ct_unit"), propertyType:value("ct_property_type"), contractValue:value("ct_contract_value"), unitType:value("ct_unit_type"), propertyArea:value("ct_area_sqm"), location:value("ct_location"), premisesNo:value("ct_premises_no") },
     p_addendum: { furnishing:value("ct_furnishing"), premises:value("ct_add_premises"), unitNo:value("ct_add_unit"), building:value("ct_add_building"), area:value("ct_add_area"), city:value("ct_add_city"), customTerms:value("ct_add_terms") },
   };
-  if (!payload.p_deal_group || !payload.p_contract_date || !payload.p_start_date || !payload.p_end_date || !payload.p_landlord_name || !payload.p_tenant_name || !Number.isFinite(payload.p_annual_rent)) { msg.textContent = "Deal, dates, landlord, tenant, and annual rent are required."; return; }
+  if (!payload.p_deal_group || !payload.p_contract_date || !payload.p_start_date || !payload.p_end_date || !payload.p_landlord_name || !payload.p_tenant_name || !Number.isFinite(payload.p_annual_rent) || payload.p_annual_rent < 0 || !Number.isFinite(payload.p_security_deposit) || payload.p_security_deposit < 0) { msg.textContent = "Deal, valid dates, parties, and non-negative amounts are required."; return; }
+  if (status === "final") {
+    const required = [[payload.p_owner_phone,"Owner phone"],[payload.p_tenant_phone,"Tenant phone"],[payload.p_payment_mode,"Payment mode"],[payload.p_details.lessorEmail,"Lessor email"],[payload.p_details.tenantEmail,"Tenant email"],[payload.p_details.buildingName,"Building"],[payload.p_details.propertyNo,"Property / unit no."],[payload.p_details.unitType,"Unit type"],[payload.p_details.location,"Location"],[payload.p_details.premisesNo,"Premises no."],[payload.p_addendum.furnishing,"Furnishing"],[payload.p_addendum.premises,"Addendum premises"],[payload.p_addendum.unitNo,"Addendum unit"],[payload.p_addendum.building,"Addendum building"],[payload.p_addendum.area,"Addendum area"],[payload.p_addendum.city,"Addendum city"]];
+    const missing = required.filter(([entry])=>!entry).map(([,label])=>label);
+    if (missing.length) { msg.textContent = `Complete before finalizing: ${missing.join(", ")}.`; return; }
+    if (!payload.p_details.lessorEmiratesId && !payload.p_details.lessorLicenseNo) { msg.textContent = "Lessor Emirates ID or company licence is required."; return; }
+    if (!payload.p_details.tenantEmiratesId && !payload.p_details.tenantLicenseNo) { msg.textContent = "Tenant Emirates ID or company licence is required."; return; }
+    if (payload.p_annual_rent <= 0 || Number(payload.p_details.contractValue) <= 0) { msg.textContent = "Annual rent and total contract value must be greater than zero."; return; }
+    if (!["ct_lessor_email","ct_tenant_email"].every((id)=>document.getElementById(id).checkValidity())) { msg.textContent = "Enter valid lessor and tenant email addresses."; return; }
+    if (!window.confirm("Finalize this complete contract? Final contracts cannot be edited and Accounts will be notified.")) return;
+  }
   const buttons = document.querySelectorAll("#contractdraft,#contractfinal"); buttons.forEach((button)=>button.disabled=true);
   const result = await supabase.rpc("save_contract", payload);
   if (result.error) { msg.textContent = result.error.message; buttons.forEach((button)=>button.disabled=false); return; }
@@ -685,9 +694,14 @@ async function saveContract(status) {
 }
 
 async function fulfillAccountTask(container) {
-  const button = container.querySelector("[data-fulfilltask]"); button.disabled = true; button.textContent = "Creating…";
+  const button = container.querySelector("[data-fulfilltask]");
+  const amount = Number(container.querySelector("[data-taskamount]").value);
+  const docDate = container.querySelector("[data-taskdate]").value;
+  const paymentMethod = container.querySelector("[data-taskpayment]").value.trim();
+  if (!docDate || !Number.isFinite(amount) || amount <= 0 || !paymentMethod) { window.alert("Date, a positive amount, and payment method are required."); return; }
+  button.disabled = true; button.textContent = "Creating…";
   const result = await supabase.rpc("fulfill_account_task", { p_task_id: container.dataset.accounttask, p_doc_type: container.querySelector("[data-tasktype]").value,
-    p_doc_date: container.querySelector("[data-taskdate]").value, p_amount: Number(container.querySelector("[data-taskamount]").value), p_payment_method: container.querySelector("[data-taskpayment]").value.trim() });
+    p_doc_date: docDate, p_amount: amount, p_payment_method: paymentMethod });
   if (result.error) { window.alert("Could not create document: " + result.error.message); button.disabled=false; button.textContent="Create"; return; }
   await reloadAfterWrite(reloadContracts, "Invoice or receipt"); render();
 }
@@ -699,13 +713,13 @@ function viewContractPrint() {
   const d = c.details || {}, a = c.addendum || {};
   const usageMarkStyle = d.propertyType === "Industrial" ? "left:25.2%;top:58.1%;" : d.propertyType === "Commercial" ? "left:43%;top:58.1%;" : "left:62.8%;top:58.1%;";
   const addendumDescription = `${a.furnishing || ""} ${a.premises || "PREMISES"}, UNIT ${a.unitNo || d.propertyNo || ""}, ${a.building || d.buildingName || ""}, ${a.area || d.location || ""}, ${a.city || "DUBAI"}`.replace(/\s+/g," ").trim();
-  return `<div class="contract-print-shell"><div class="contract-print-toolbar"><div><strong>DLD Contract + Xsite Addendum</strong><div>${esc(c.contract_no)} · ${esc(c.tenant_name)} · ${esc(c.status.toUpperCase())}</div></div><div><button class="btn btn-secondary" id="printclose">Back</button> <button class="btn btn-primary" id="printnow">Print / Save PDF</button></div></div>
+  return `<div class="contract-print-shell" role="dialog" aria-modal="true" aria-label="Contract print preview" tabindex="-1"><div class="contract-print-toolbar"><div><strong>DLD Contract + Xsite Addendum</strong><div>${esc(c.contract_no)} · ${esc(c.tenant_name)} · ${esc(c.status.toUpperCase())}</div></div><div><button class="btn btn-secondary" id="printclose">Back</button> <button class="btn btn-primary" id="printnow">Print / Save PDF</button></div></div>
     ${c.status === "draft" ? `<div class="contract-draft-watermark">DRAFT</div>` : ""}
     <div class="dld-print-page"><img src="./contract-assets/ejari-page-1.png" alt="DLD tenancy contract page 1">
       ${fill(showDate(c.contract_date),"left:8%;top:13.3%;width:18%")}${fill(c.landlord_name,"left:15.5%;top:20.5%;width:73%")}${fill(d.lessorName,"left:15.5%;top:23.2%;width:73%")}${fill(d.lessorEmiratesId,"left:22%;top:26%;width:62%")}${fill(d.lessorLicenseNo,"left:14%;top:28.6%;width:29%")}${fill(d.lessorLicensingAuthority,"left:63%;top:28.6%;width:25%")}${fill(d.lessorEmail,"left:15%;top:31.6%;width:69%")}${fill(c.owner_phone,"left:15%;top:34.2%;width:69%")}
       ${fill(c.tenant_name,"left:15.5%;top:40.7%;width:70%")}${fill(d.tenantEmiratesId,"left:22%;top:43.5%;width:62%")}${fill(d.tenantLicenseNo,"left:14%;top:46.2%;width:29%")}${fill(d.tenantLicensingAuthority,"left:63%;top:46.2%;width:25%")}${fill(d.tenantEmail,"left:15%;top:49.2%;width:69%")}${fill(c.tenant_phone,"left:15%;top:51.9%;width:69%")}
       ${fill("X",usageMarkStyle)}${fill(d.plotNo,"left:12%;top:61.1%;width:31%")}${fill(d.makaniNo,"left:61%;top:61.1%;width:28%")}${fill(d.buildingName,"left:15%;top:64%;width:28%")}${fill(d.propertyNo,"left:61%;top:64%;width:28%")}${fill(d.unitType,"left:15%;top:66.8%;width:28%")}${fill(d.propertyArea,"left:65%;top:66.8%;width:24%")}${fill(d.location,"left:12%;top:69.6%;width:31%")}${fill(d.premisesNo,"left:64%;top:69.6%;width:25%")}
-      ${fill(showDate(c.start_date),"left:21%;top:76.2%;width:14%")}${fill(showDate(c.end_date),"left:36%;top:76.2%;width:14%")}${fill(money(c.annual_rent),"left:63%;top:76.2%;width:25%")}${fill(money(c.annual_rent),"left:15%;top:79.2%;width:27%")}${fill(money(c.security_deposit),"left:65%;top:79.2%;width:23%")}${fill(c.payment_mode,"left:15%;top:81.9%;width:71%")}${fill(showDate(c.contract_date),"left:34%;top:94.7%;width:12%")}${fill(showDate(c.contract_date),"left:82%;top:94.7%;width:12%")}
+      ${fill(showDate(c.start_date),"left:21%;top:76.2%;width:14%")}${fill(showDate(c.end_date),"left:36%;top:76.2%;width:14%")}${fill(money(d.contractValue || c.annual_rent),"left:63%;top:76.2%;width:25%")}${fill(money(c.annual_rent),"left:15%;top:79.2%;width:27%")}${fill(money(c.security_deposit),"left:65%;top:79.2%;width:23%")}${fill(c.payment_mode,"left:15%;top:81.9%;width:71%")}${fill(showDate(c.contract_date),"left:34%;top:94.7%;width:12%")}${fill(showDate(c.contract_date),"left:82%;top:94.7%;width:12%")}
     </div>
     <div class="dld-print-page"><img src="./contract-assets/ejari-page-2.png" alt="DLD tenancy contract page 2">${fill(showDate(c.contract_date),"left:34%;top:94.7%;width:12%")}${fill(showDate(c.contract_date),"left:82%;top:94.7%;width:12%")}</div>
     <div class="dld-print-page"><img src="./contract-assets/ejari-page-3.png" alt="DLD tenancy contract page 3">${fill(c.additional_terms,"left:9.5%;top:36.7%;width:81%;height:16%;white-space:pre-line","dld-fill dld-terms-fill")}${fill(showDate(c.contract_date),"left:34%;top:91.6%;width:12%")}${fill(showDate(c.contract_date),"left:82%;top:91.6%;width:12%")}</div>
@@ -1556,6 +1570,7 @@ function wireModals() {
   const contractDraft = document.getElementById("contractdraft"); if (contractDraft) contractDraft.onclick = () => saveContract("draft");
   const contractFinal = document.getElementById("contractfinal"); if (contractFinal) contractFinal.onclick = () => saveContract("final");
   const contractDeal = document.getElementById("ct_deal"); if (contractDeal && !state.contractForm?.id) contractDeal.onchange = () => {
+    if (!window.confirm("Change the related deal? Any unsaved contract entries will be replaced.")) { contractDeal.value = state.contractForm.deal_group; return; }
     const deal = dealGroupOptions().find((option) => option.group === contractDeal.value)?.deal;
     state.contractForm = contractDraftFromDeal(deal); render();
   };
@@ -1572,6 +1587,13 @@ function wireModals() {
     } catch { window.alert("The contract template images did not finish loading. Please try again."); }
     finally { printNow.disabled = false; printNow.textContent = "Print / Save PDF"; }
   };
+  document.onkeydown = (event) => {
+    if (event.key !== "Escape") return;
+    if (state.printContract) { state.printContract = null; render(); }
+    else if (state.contractForm) { state.contractForm = null; render(); }
+  };
+  if (state.contractForm) document.getElementById("ct_deal")?.focus();
+  else if (state.printContract) document.getElementById("printclose")?.focus();
 }
 function rerenderTx() {
   const main = root.querySelector("main"); const focus = document.activeElement === document.getElementById("txq");
