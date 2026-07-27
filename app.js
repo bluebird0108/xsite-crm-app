@@ -8,12 +8,13 @@ const state = {
   profile: null,
   screen: "dashboard",
   authMode: "signin",
-  agents: [], deals: [], commission: [], cash: [], team: [], docs: [],
+  agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [],
   selectedAgent: null,
   txQuery: "", txType: "All", ledgerQuery: "",
   txMonth: null, ledgerMonth: null,
   invMonth: null, invType: "All", invQuery: "",
   cashDate: null,
+  staffQuery: "", staffBranch: "All",
   dealForm: null, pwForm: false, docForm: null, cashForm: null,
 };
 
@@ -39,13 +40,14 @@ const roleIn = (...r) => r.includes(state.profile?.role);
 // ── data ─────────────────────────────────────────────────
 async function loadData() {
   if (roleIn("pending")) { state.agents = []; state.deals = []; state.commission = []; state.cash = []; state.team = []; return; }
-  const [ag, dl, cm, ch, tm, md] = await Promise.all([
+  const [ag, dl, cm, ch, tm, md, sf] = await Promise.all([
     supabase.from("agents").select("*").order("name"),
     supabase.from("deals").select("*").order("sno"),
     supabase.from("commission_entries").select("*").order("agent_name"),
     roleIn("owner", "accounts") ? supabase.from("cash_position").select("*").order("sort_order") : Promise.resolve({ data: [] }),
     roleIn("owner") ? supabase.from("profiles").select("*").order("created_at") : Promise.resolve({ data: [] }),
     roleIn("owner", "accounts", "admin") ? supabase.from("money_docs").select("*").order("doc_no") : Promise.resolve({ data: [] }),
+    roleIn("owner", "admin") ? supabase.from("staff").select("*").order("name") : Promise.resolve({ data: [] }),
   ]);
   state.agents = ag.data || [];
   state.deals = dl.data || [];
@@ -53,6 +55,7 @@ async function loadData() {
   state.cash = ch.data || [];
   state.team = tm.data || [];
   state.docs = md.data || [];
+  state.staff = sf.data || [];
   const months = availableMonths(state.deals, "month");
   if (!state.txMonth || !months.includes(state.txMonth)) state.txMonth = months[0] || null;
   const lmonths = availableMonths(state.commission, "month");
@@ -202,6 +205,7 @@ function renderApp() {
     ${showTx ? navLink("transactions", "Transactions") : ""}
     ${roleIn("owner", "accounts", "admin") ? navLink("invoices", "Invoices & Receipts") : ""}
     ${showLedger ? navLink("ledgers", ledgerLabel) : ""}
+    ${roleIn("owner", "admin") ? navLink("staff", "Staff") : ""}
     ${showTeam ? navLink("team", pendingTeam ? `Team (${pendingTeam})` : "Team") : ""}
     <div class="nav-right">
       <span class="tag tag-neutral">${esc(p.role)}</span>
@@ -215,6 +219,7 @@ function renderApp() {
   else if (state.screen === "transactions" && showTx) body = viewTransactions();
   else if (state.screen === "invoices" && roleIn("owner", "accounts", "admin")) body = viewInvoices();
   else if (state.screen === "ledgers" && showLedger) body = viewLedgers();
+  else if (state.screen === "staff" && roleIn("owner", "admin")) body = viewStaff();
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else body = viewDashboard();
   root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal();
@@ -259,6 +264,52 @@ function viewPending() {
       <p class="text-muted" style="margin:0">Your account is registered. The owner will approve your access and assign your role — check back soon.</p></div>
     </header>
     <div class="md-empty">Nothing to show yet. Once approved, your workspace appears here automatically.</div>
+  </div>`;
+}
+
+// ── view: staff directory (owner + admin) ────────────────
+function viewStaff() {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const daysTo = (iso) => iso ? Math.round((new Date(iso + "T00:00:00") - today) / 86400000) : null;
+  const q = state.staffQuery.trim().toLowerCase();
+  const branches = ["All", ...[...new Set(state.staff.map((s) => s.branch).filter(Boolean))].sort()];
+  const branchTabs = branches.map((b) =>
+    `<button class="tab ${state.staffBranch === b ? "is-active" : ""}" data-staffbranch="${esc(b)}">${b}${b === "All" ? ` (${state.staff.length})` : ""}</button>`).join("");
+  const rows = state.staff.filter((s) =>
+    (state.staffBranch === "All" || s.branch === state.staffBranch) &&
+    (!q || [s.name, s.job, s.nationality, s.card_number].join(" ").toLowerCase().includes(q)));
+  const expiringSoon = state.staff.filter((s) => { const d = daysTo(s.card_expiry); return d !== null && d <= 60; });
+  const body = rows.map((s) => {
+    const d = daysTo(s.card_expiry);
+    const expClass = d === null ? "" : d < 0 ? "expiry-days is-overdue" : d <= 60 ? "expiry-days" : "";
+    const expLabel = d === null ? "—" : d < 0 ? `${showDate(s.card_expiry)} · expired` : d <= 60 ? `${showDate(s.card_expiry)} · ${d}d` : showDate(s.card_expiry);
+    return `<tr>
+      <td>${esc(s.name)}</td><td>${esc(s.job || "—")}</td><td>${esc(s.nationality || "—")}</td>
+      <td>${esc(s.branch || "—")}</td><td>${esc(s.card_number || "—")}</td>
+      <td><span class="${expClass}">${esc(expLabel)}</span></td></tr>`;
+  }).join("");
+  return `
+  <div>
+    <div style="margin-bottom:20px"><span class="card-kicker">Owner / HR</span><h1 style="margin-top:4px">Staff Directory</h1><p class="text-muted" style="margin:0">${state.staff.length} employees across Main and Branch offices.</p></div>
+    ${expiringSoon.length ? `
+    <section class="md-section" style="margin-bottom:20px">
+      <div class="md-section-header"><h3>Work permits expiring soon</h3><span class="tag tag-accent">${expiringSoon.length} within 60 days</span></div>
+      <div class="table-wrap"><table class="grid"><thead><tr><th>Name</th><th>Job</th><th>Branch</th><th>Card no</th><th>Expiry</th></tr></thead><tbody>
+        ${expiringSoon.sort((a,b)=>a.card_expiry.localeCompare(b.card_expiry)).map((s)=>{const d=daysTo(s.card_expiry);return `<tr><td>${esc(s.name)}</td><td>${esc(s.job||"—")}</td><td>${esc(s.branch)}</td><td>${esc(s.card_number)}</td><td><span class="${d<0?"expiry-days is-overdue":"expiry-days"}">${showDate(s.card_expiry)} · ${d<0?Math.abs(d)+"d overdue":d+"d"}</span></td></tr>`;}).join("")}
+      </tbody></table></div>
+    </section>` : ""}
+    <div class="tx-toolbar">
+      <div class="tabs">${branchTabs}</div>
+      <input class="input" id="staffq" type="search" placeholder="Search name, job, nationality, card no…" value="${esc(state.staffQuery)}">
+      <span class="text-muted" style="font-size:12px">${rows.length} shown</span>
+    </div>
+    <div class="sheet">
+      <div class="sheet-hint">Full roster — from official labour work-permit lists</div>
+      <div class="table-wrap"><table class="grid" style="min-width:900px">
+        <thead><tr><th>Name</th><th>Job</th><th>Nationality</th><th>Branch</th><th>Work-permit card</th><th>Card expiry</th></tr></thead>
+        <tbody>${body || `<tr><td colspan="6"><div class="md-empty" style="border:0">No employees match.</div></td></tr>`}</tbody>
+      </table></div>
+    </div>
   </div>`;
 }
 
@@ -970,6 +1021,14 @@ function wireScreen() {
   });
   root.querySelectorAll("[data-deletedoc]").forEach((b) => b.onclick = () => deleteDoc(b.dataset.deletedoc));
   root.querySelectorAll("[data-markpaid]").forEach((b) => b.onclick = () => markPaid(b.dataset.markpaid));
+  // staff
+  root.querySelectorAll("[data-staffbranch]").forEach((b) => b.onclick = () => { state.staffBranch = b.dataset.staffbranch; render(); });
+  const sq = document.getElementById("staffq");
+  if (sq) sq.oninput = () => {
+    state.staffQuery = sq.value;
+    const main = root.querySelector("main"); main.innerHTML = viewStaff(); wireScreen();
+    const el = document.getElementById("staffq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
+  };
   // cash
   const ce = document.getElementById("cashedit");
   if (ce) ce.onclick = openCashForm;
