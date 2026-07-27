@@ -11,7 +11,16 @@ const state = {
   agents: [], deals: [], commission: [], cash: [], team: [],
   selectedAgent: null,
   txQuery: "", txType: "All", ledgerQuery: "",
+  txMonth: null, ledgerMonth: null,
+  dealForm: null, pwForm: false,
 };
+
+const MONTH_LABELS = { "01":"January","02":"February","03":"March","04":"April","05":"May","06":"June","07":"July","08":"August","09":"September","10":"October","11":"November","12":"December" };
+function monthLabel(m) { if (!m) return "—"; const [y, mm] = m.split("-"); return `${MONTH_LABELS[mm] || mm} ${y}`; }
+function availableMonths(rows, key) {
+  const set = new Set(rows.map((r) => r[key]).filter(Boolean));
+  return [...set].sort().reverse();
+}
 
 // ── helpers ──────────────────────────────────────────────
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
@@ -40,6 +49,19 @@ async function loadData() {
   state.commission = cm.data || [];
   state.cash = ch.data || [];
   state.team = tm.data || [];
+  const months = availableMonths(state.deals, "month");
+  if (!state.txMonth || !months.includes(state.txMonth)) state.txMonth = months[0] || null;
+  const lmonths = availableMonths(state.commission, "month");
+  if (!state.ledgerMonth || !lmonths.includes(state.ledgerMonth)) state.ledgerMonth = lmonths[0] || null;
+}
+
+async function reloadDeals() {
+  const [dl, cm] = await Promise.all([
+    supabase.from("deals").select("*").order("sno"),
+    supabase.from("commission_entries").select("*").order("agent_name"),
+  ]);
+  state.deals = dl.data || [];
+  state.commission = cm.data || [];
 }
 
 // ── auth ─────────────────────────────────────────────────
@@ -163,6 +185,7 @@ function renderApp() {
     <div class="nav-right">
       <span class="tag tag-neutral">${esc(p.role)}</span>
       <span class="text-muted" style="font-size:13px">${esc(p.full_name || p.email)}</span>
+      <a id="pwopen">Password</a>
       <a id="logout">Log out</a>
     </div>
   </nav>`;
@@ -172,7 +195,7 @@ function renderApp() {
   else if (state.screen === "ledgers" && showLedger) body = viewLedgers();
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>`;
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
@@ -324,7 +347,13 @@ function viewTransactions() {
   const tiers = expiryTiers();
   const hasExp = tiers.some((t) => t.items.length);
   const q = state.txQuery.trim().toLowerCase();
+  const canAdd = roleIn("owner", "accounts", "admin");
+  const canEdit = roleIn("owner", "accounts");
+  const months = availableMonths(state.deals, "month");
+  const monthTabs = months.map((m) =>
+    `<button class="tab ${state.txMonth === m ? "is-active" : ""}" data-txmonth="${m}">${monthLabel(m)}</button>`).join("");
   const rows = state.deals.filter((d) =>
+    (!state.txMonth || d.month === state.txMonth) &&
     (state.txType === "All" || (d.deal_type || "").replace("Off plan", "Off Plan") === state.txType) &&
     (!q || [d.agent, d.agent2, d.third_party, d.building, d.unit, d.area, d.landlord, d.tenant, d.payment_method].join(" ").toLowerCase().includes(q)));
   const dealKeys = new Set(rows.map((d) => [d.unit, d.building, d.price, d.tc_start].join("|")));
@@ -349,12 +378,17 @@ function viewTransactions() {
     <td class="numeric">${money(d.price)}</td><td class="numeric">${money(d.total_commission)}</td><td class="numeric">${money(d.commission_received)}</td>
     <td>${esc(d.landlord || "—")}</td><td>${esc(d.tenant || "—")}</td>
     <td>${esc(showDate(d.tc_start, d.tc_start_raw))}</td><td>${esc(showDate(d.tc_end, d.tc_end_raw))}</td>
-    <td class="numeric">${money(d.security_deposit)}</td><td>${esc(d.cheque_count || "—")}</td><td>${esc(d.payment_method || "—")}</td></tr>`).join("");
+    <td class="numeric">${money(d.security_deposit)}</td><td>${esc(d.cheque_count || "—")}</td><td>${esc(d.payment_method || "—")}</td>
+    ${canEdit ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editdeal="${d.id}">Edit</button><button class="btn btn-secondary btn-mini" data-deletedeal="${d.id}">Delete</button></div></td>` : ""}</tr>`).join("");
   return `
   <div>
-    <div style="margin-bottom:20px"><span class="card-kicker">Accounts / Master Sheet</span><h1 style="margin-top:4px">Transactions Register</h1><p class="text-muted" style="margin:0">Every June 2026 deal with tenancy, deposit, and payment details.</p></div>
+    <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div><span class="card-kicker">Accounts / Master Sheet</span><h1 style="margin-top:4px">Transactions Register</h1><p class="text-muted" style="margin:0">Every deal with tenancy, deposit, and payment details — ${monthLabel(state.txMonth)}.</p></div>
+      ${canAdd ? `<button class="btn btn-primary" id="newdeal">+ New deal</button>` : ""}
+    </div>
     ${expBlock}
     <div class="tx-toolbar">
+      <div class="tabs">${monthTabs}</div>
       <input class="input" id="txq" type="search" placeholder="Search agent, building, unit, landlord, tenant…" value="${esc(state.txQuery)}">
       <div class="tabs">${tabs}</div>
       <span class="text-muted" style="font-size:12px">${rows.length} rows · ${dealKeys.size} unique deals</span>
@@ -362,13 +396,223 @@ function viewTransactions() {
     <div class="sheet">
       <div class="sheet-hint">Full register — scroll horizontally for tenancy and payment columns</div>
       <div class="table-wrap"><table class="grid wide">
-        <thead><tr><th>S.No</th><th>Date</th><th>Agent(s)</th><th>Third party</th><th>Type</th><th>Unit</th><th>Building</th><th>Area</th><th>Rent / Sale price</th><th>Total commission</th><th>Commission received</th><th>Landlord</th><th>Tenant</th><th>TC start</th><th>TC end</th><th>Deposit</th><th>Cheques</th><th>Payment</th></tr></thead>
+        <thead><tr><th>S.No</th><th>Date</th><th>Agent(s)</th><th>Third party</th><th>Type</th><th>Unit</th><th>Building</th><th>Area</th><th>Rent / Sale price</th><th>Total commission</th><th>Commission received</th><th>Landlord</th><th>Tenant</th><th>TC start</th><th>TC end</th><th>Deposit</th><th>Cheques</th><th>Payment</th>${canEdit ? "<th></th>" : ""}</tr></thead>
         <tbody>${body}
-          <tr class="total-row"><td></td><td>TOTAL</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="numeric">${money(Math.round(totc*100)/100)}</td><td class="numeric">${money(Math.round(recv*100)/100)}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+          <tr class="total-row"><td></td><td>TOTAL</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="numeric">${money(Math.round(totc*100)/100)}</td><td class="numeric">${money(Math.round(recv*100)/100)}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>${canEdit ? "<td></td>" : ""}</tr>
         </tbody></table></div>
     </div>
-    ${rows.length === 0 ? `<div class="md-empty" style="margin-top:12px">No transactions match the current search or filter.</div>` : ""}
+    ${rows.length === 0 ? `<div class="md-empty" style="margin-top:12px">No transactions in ${monthLabel(state.txMonth)} match the current search or filter.</div>` : ""}
   </div>`;
+}
+
+// ── deal form (add / edit) ───────────────────────────────
+function emptyDealForm() {
+  const today = new Date().toISOString().slice(0, 10);
+  return { groupId: null, editIds: [], deal_date: today, agent: "", agent2: "", third_party: "",
+    deal_type: "Rent", unit: "", building: "", area: "", price: "", total_commission: "",
+    commission_received: "", vat: "", commission_ex_vat: "", agent_business: "",
+    company_share: "", agent_share: "", payment_method: "", tc_start: "", duration: "12",
+    tc_end: "", security_deposit: "", cheque_count: "", landlord: "", tenant: "", bank: "", msg: "" };
+}
+function dealFormFromRow(d) {
+  const group = state.deals.filter((x) => x.group_id === d.group_id);
+  return { groupId: d.group_id, editIds: group.map((x) => x.id),
+    deal_date: d.deal_date || "", agent: d.agent || "", agent2: d.agent2 === "N/A" ? "" : (d.agent2 || ""),
+    third_party: d.third_party === "N/A" ? "" : (d.third_party || ""),
+    deal_type: (d.deal_type || "Rent").replace("Off plan", "Off Plan"), unit: d.unit || "",
+    building: d.building || "", area: d.area || "", price: d.price ?? "",
+    total_commission: d.total_commission ?? "", commission_received: d.commission_received ?? "",
+    vat: d.vat ?? "", commission_ex_vat: d.commission_ex_vat ?? "", agent_business: d.agent_business ?? "",
+    company_share: d.company_share ?? "", agent_share: d.agent_share ?? "",
+    payment_method: d.payment_method || "", tc_start: d.tc_start || "",
+    duration: d.contract_duration || "12", tc_end: d.tc_end || "",
+    security_deposit: d.security_deposit ?? "", cheque_count: d.cheque_count || "",
+    landlord: d.landlord || "", tenant: d.tenant || "", bank: d.bank || "", msg: "" };
+}
+function viewDealModal() {
+  const f = state.dealForm;
+  if (!f) return "";
+  const agentNames = state.agents.map((a) => a.name);
+  const dl = `<datalist id="agentlist">${agentNames.map((n) => `<option value="${esc(n)}">`).join("")}</datalist>`;
+  const typeOpts = ["Rent", "Renewal", "Off Plan", "Secondary Sale"]
+    .map((t) => `<option ${f.deal_type === t ? "selected" : ""}>${t}</option>`).join("");
+  const field = (id, label, type = "text", extra = "") =>
+    `<div class="field"><label for="f_${id}">${label}</label><input class="input" id="f_${id}" type="${type}" value="${esc(f[id])}" ${extra}></div>`;
+  return `
+  <div class="modal-backdrop" id="dealbackdrop">
+    <div class="modal" role="dialog" aria-labelledby="dealtitle">
+      <div class="modal-head"><h3 id="dealtitle">${f.groupId ? "Edit deal" : "New deal"}</h3><button class="modal-close" id="dealclose" aria-label="Close">×</button></div>
+      <div class="modal-body">${dl}
+        <div class="form-grid">
+          ${field("deal_date", "Deal date", "date")}
+          <div class="field"><label for="f_deal_type">Type</label><select class="input" id="f_deal_type">${typeOpts}</select></div>
+          ${field("unit", "Unit")}
+          ${field("agent", "Agent", "text", 'list="agentlist"')}
+          ${field("agent2", "Agent 2 (shared deal)", "text", 'list="agentlist" placeholder="Leave empty if solo"')}
+          ${field("third_party", "Third party", "text", 'placeholder="e.g. KDK Real Estate (AED 6,035.5)"')}
+          ${field("building", "Building")}
+          ${field("area", "Area")}
+          ${field("price", "Annual rent / sale price", "number")}
+          <div class="form-section">Commission — auto-calculated, editable</div>
+          ${field("total_commission", "Total commission", "number")}
+          ${field("commission_received", "Commission received", "number")}
+          ${field("vat", "VAT @ 5%", "number")}
+          ${field("commission_ex_vat", "Commission ex-VAT", "number")}
+          ${field("agent_business", "Agent business", "number")}
+          <div class="field"></div>
+          ${field("company_share", "Company 50%", "number")}
+          ${field("agent_share", "Agent 50%", "number")}
+          ${field("payment_method", "Payment / remarks")}
+          <div class="form-section">Tenancy contract</div>
+          ${field("tc_start", "TC start", "date")}
+          ${field("duration", "Duration (months)", "number")}
+          ${field("tc_end", "TC end (auto)", "date")}
+          ${field("security_deposit", "Security deposit", "number")}
+          ${field("cheque_count", "No. of cheques")}
+          ${field("bank", "Bank")}
+          ${field("landlord", "Landlord (L.L name)")}
+          ${field("tenant", "Tenant")}
+          <div class="form-note">Shared deals: filling Agent 2 saves two mirrored register rows and both agents' ledger entries, linked together.</div>
+        </div>
+        <div class="modal-actions">
+          <span class="form-msg" id="dealmsg">${esc(f.msg)}</span>
+          <button class="btn btn-secondary" id="dealcancel">Cancel</button>
+          <button class="btn btn-primary" id="dealsave">${f.groupId ? "Save changes" : "Save deal"}</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+function collectDealForm() {
+  const f = state.dealForm;
+  ["deal_date","deal_type","unit","agent","agent2","third_party","building","area","price",
+   "total_commission","commission_received","vat","commission_ex_vat","agent_business",
+   "company_share","agent_share","payment_method","tc_start","duration","tc_end",
+   "security_deposit","cheque_count","bank","landlord","tenant"].forEach((k) => {
+    const el = document.getElementById("f_" + k); if (el) f[k] = el.value;
+  });
+}
+function dealAutoMath() {
+  collectDealForm();
+  const f = state.dealForm;
+  const totc = parseFloat(f.total_commission), recv = parseFloat(f.commission_received);
+  const shared = !!f.agent2.trim();
+  const r2 = (n) => Math.round(n * 100) / 100;
+  if (Number.isFinite(totc)) f.vat = r2(totc / 21);
+  if (Number.isFinite(recv) && Number.isFinite(parseFloat(f.vat))) f.commission_ex_vat = r2(recv - parseFloat(f.vat));
+  const exv = parseFloat(f.commission_ex_vat);
+  if (Number.isFinite(exv)) {
+    f.agent_business = r2(shared ? exv / 2 : exv);
+    f.company_share = r2(f.agent_business / 2);
+    f.agent_share = r2(f.agent_business / 2);
+  }
+  ["vat","commission_ex_vat","agent_business","company_share","agent_share"].forEach((k) => {
+    const el = document.getElementById("f_" + k); if (el) el.value = f[k];
+  });
+}
+function dealAutoEnd() {
+  collectDealForm();
+  const f = state.dealForm;
+  if (f.tc_start && Number.isFinite(parseInt(f.duration))) {
+    const d = new Date(f.tc_start + "T00:00:00");
+    d.setMonth(d.getMonth() + parseInt(f.duration));
+    d.setDate(d.getDate() - 1);
+    const pad = (n) => String(n).padStart(2, "0");
+    f.tc_end = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const el = document.getElementById("f_tc_end"); if (el) el.value = f.tc_end;
+  }
+}
+async function saveDeal() {
+  collectDealForm();
+  const f = state.dealForm;
+  const msgEl = document.getElementById("dealmsg");
+  if (!f.deal_date || !f.agent.trim() || !f.building.trim()) { msgEl.textContent = "Date, agent, and building are required."; return; }
+  const btn = document.getElementById("dealsave"); btn.disabled = true; btn.textContent = "Saving…";
+  const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
+  const txt = (v, fb = null) => v && String(v).trim() ? String(v).trim() : fb;
+  const groupId = f.groupId || crypto.randomUUID();
+  const month = f.deal_date.slice(0, 7);
+  const agent1 = f.agent.trim(), agent2 = f.agent2.trim();
+  const base = {
+    group_id: groupId, deal_date: f.deal_date, month,
+    third_party: txt(f.third_party, "N/A"),
+    deal_type: f.deal_type, unit: txt(f.unit), building: txt(f.building), area: txt(f.area),
+    price: num(f.price), total_commission: num(f.total_commission),
+    commission_received: num(f.commission_received), vat: num(f.vat),
+    commission_ex_vat: num(f.commission_ex_vat), agent_business: num(f.agent_business),
+    company_share: num(f.company_share), agent_share: num(f.agent_share),
+    payment_method: txt(f.payment_method),
+    tc_start: f.tc_start || null, contract_duration: txt(f.duration),
+    tc_end: f.tc_end || null,
+    security_deposit: num(f.security_deposit), cheque_count: txt(f.cheque_count),
+    landlord: txt(f.landlord), tenant: txt(f.tenant), bank: txt(f.bank),
+  };
+  const maxSno = state.deals.reduce((m, d) => Math.max(m, d.sno || 0), 0);
+  const dealRows = [{ ...base, sno: maxSno + 1, agent: agent1, agent2: agent2 || "N/A" }];
+  if (agent2) dealRows.push({ ...base, sno: maxSno + 2, agent: agent2, agent2: agent1 });
+  const commissionRows = [agent1, agent2].filter(Boolean).map((name, i, arr) => ({
+    group_id: groupId, agent_name: name.toUpperCase(), entry_date: f.deal_date,
+    third_party: base.third_party, agent2: arr.length === 2 ? arr[1 - i] : "N/A",
+    deal_type: f.deal_type, unit: base.unit, building: base.building, area: base.area,
+    annual_value: base.price, total_commission: base.total_commission,
+    received: base.commission_received, vat: base.vat, commission_ex_vat: base.commission_ex_vat,
+    agent_business: base.agent_business, xsite_share: base.company_share,
+    agent_share: base.agent_share, month,
+  }));
+  if (f.groupId) {
+    const delD = await supabase.from("deals").delete().eq("group_id", groupId);
+    const delC = await supabase.from("commission_entries").delete().eq("group_id", groupId);
+    if (delD.error || delC.error) { msgEl.textContent = (delD.error || delC.error).message; btn.disabled = false; btn.textContent = "Save changes"; return; }
+  }
+  const insD = await supabase.from("deals").insert(dealRows);
+  if (insD.error) { msgEl.textContent = insD.error.message; btn.disabled = false; btn.textContent = "Save deal"; return; }
+  const insC = await supabase.from("commission_entries").insert(commissionRows);
+  if (insC.error) { msgEl.textContent = "Deal saved but ledger entry failed: " + insC.error.message; }
+  await reloadDeals();
+  state.txMonth = month;
+  state.dealForm = null;
+  render();
+}
+async function deleteDeal(id) {
+  const d = state.deals.find((x) => x.id === id);
+  if (!d) return;
+  const group = state.deals.filter((x) => x.group_id === d.group_id);
+  const label = `${d.unit || ""} ${d.building || ""} (${d.agent}${group.length > 1 ? " + mirror row" : ""})`;
+  if (!window.confirm(`Delete this deal and its linked entries?\n${label}`)) return;
+  await supabase.from("commission_entries").delete().eq("group_id", d.group_id);
+  const { error } = await supabase.from("deals").delete().eq("group_id", d.group_id);
+  if (error) { window.alert("Could not delete: " + error.message); return; }
+  await reloadDeals();
+  render();
+}
+
+// ── password modal ───────────────────────────────────────
+function viewPwModal() {
+  if (!state.pwForm) return "";
+  return `
+  <div class="modal-backdrop" id="pwbackdrop">
+    <div class="modal" style="width:min(420px,100%)" role="dialog" aria-labelledby="pwtitle">
+      <div class="modal-head"><h3 id="pwtitle">Change password</h3><button class="modal-close" id="pwclose" aria-label="Close">×</button></div>
+      <div class="modal-body">
+        <div class="field"><label for="pw1" style="display:block;margin-bottom:5px;font-size:12px;font-weight:700">New password (min 8 characters)</label>
+        <input class="input" id="pw1" type="password" autocomplete="new-password"></div>
+        <div class="modal-actions">
+          <span class="form-msg" id="pwmsg"></span>
+          <button class="btn btn-secondary" id="pwcancel">Cancel</button>
+          <button class="btn btn-primary" id="pwsave">Update password</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+async function savePassword() {
+  const pw = document.getElementById("pw1").value;
+  const msgEl = document.getElementById("pwmsg");
+  if (pw.length < 8) { msgEl.textContent = "Minimum 8 characters."; return; }
+  const btn = document.getElementById("pwsave"); btn.disabled = true; btn.textContent = "Updating…";
+  const { error } = await supabase.auth.updateUser({ password: pw });
+  if (error) { msgEl.textContent = error.message; btn.disabled = false; btn.textContent = "Update password"; return; }
+  state.pwForm = false; render();
 }
 
 // ── view: agent ledgers ──────────────────────────────────
@@ -381,7 +625,10 @@ function viewLedgers() {
   const q = state.ledgerQuery.trim().toLowerCase();
   const filtered = names.filter((n) => !q || n.toLowerCase().includes(q));
   if (!state.selectedAgent || !names.includes(state.selectedAgent)) state.selectedAgent = names[0] || null;
-  const rows = state.commission.filter((r) => r.agent_name === state.selectedAgent);
+  const lmonths = availableMonths(state.commission, "month");
+  const lmonthTabs = lmonths.map((m) =>
+    `<button class="tab ${state.ledgerMonth === m ? "is-active" : ""}" data-ledgermonth="${m}">${monthLabel(m)}</button>`).join("");
+  const rows = state.commission.filter((r) => r.agent_name === state.selectedAgent && (!state.ledgerMonth || r.month === state.ledgerMonth));
   const sum = (k) => rows.reduce((s, r) => s + (+r[k] || 0), 0);
   const list = filtered.map((n) => `
     <button class="ledger-agent ${n === state.selectedAgent ? "is-active" : ""}" data-agent="${esc(n)}">
@@ -395,14 +642,14 @@ function viewLedgers() {
       <div class="ledger-metric is-accent"><span class="ledger-metric-label">Agent share</span><span class="ledger-metric-value">${money(Math.round(sum("agent_share")))}</span></div>
       <div class="ledger-metric"><span class="ledger-metric-label">Deals</span><span class="ledger-metric-value">${rows.length}</span></div>
     </div>
-    <div class="sheet"><div class="sheet-hint">${esc(state.selectedAgent)} — June 2026 commission statement</div>
+    <div class="sheet"><div class="sheet-hint">${esc(state.selectedAgent)} — ${monthLabel(state.ledgerMonth)} commission statement</div>
     <div class="table-wrap"><table class="grid wide">
       <thead><tr><th>Date</th><th>Third party</th><th>Agent 2</th><th>Type</th><th>Unit</th><th>Building</th><th>Area</th><th>Annual value</th><th>Total commission</th><th>Received</th><th>VAT</th><th>Ex-VAT</th><th>Agent business</th><th>Xsite share</th><th>Agent share</th></tr></thead>
       <tbody>${rows.map((r) => `<tr><td>${esc(showDate(r.entry_date, r.entry_date_raw))}</td><td class="tp-cell">${esc(r.third_party || "—")}</td><td>${esc(r.agent2 || "—")}</td><td>${esc(r.deal_type)}</td><td class="unit-cell">${esc(r.unit)}</td><td>${esc(r.building)}</td><td>${esc(r.area)}</td><td class="numeric">${money(r.annual_value)}</td><td class="numeric">${money(r.total_commission)}</td><td class="numeric">${money(r.received)}</td><td class="numeric">${money(r.vat)}</td><td class="numeric">${money(r.commission_ex_vat)}</td><td class="numeric">${money(r.agent_business)}</td><td class="numeric">${money(r.xsite_share)}</td><td class="numeric">${money(r.agent_share)}</td></tr>`).join("")}</tbody>
     </table></div></div>` : `<div class="md-empty">No commission records to show.</div>`;
   return `
   <div>
-    <div style="margin-bottom:20px"><span class="card-kicker">Accounts / Commissions</span><h1 style="margin-top:4px">${state.profile.role === "agent" ? "My Commission Ledger" : "Agent Commission Ledgers"}</h1><p class="text-muted" style="margin:0">June 2026 statements with VAT and 50/50 share.</p></div>
+    <div style="margin-bottom:20px"><span class="card-kicker">Accounts / Commissions</span><h1 style="margin-top:4px">${state.profile.role === "agent" ? "My Commission Ledger" : "Agent Commission Ledgers"}</h1><p class="text-muted" style="margin:0">${monthLabel(state.ledgerMonth)} statements with VAT and 50/50 share.</p></div>\n    <div class="tabs" style="margin-bottom:16px">${lmonthTabs}</div>
     <div class="ledger-layout">
       <aside class="ledger-panel">
         ${state.profile.role !== "agent" ? `<input class="input" id="lq" type="search" placeholder="Search agents…" value="${esc(state.ledgerQuery)}" style="margin-bottom:12px">` : ""}
@@ -416,12 +663,40 @@ function viewLedgers() {
 // ── wiring ───────────────────────────────────────────────
 function wireScreen() {
   const txq = document.getElementById("txq");
-  if (txq) txq.oninput = () => { state.txQuery = txq.value; const s = root.querySelector(".sheet"); rerenderTx(); };
+  if (txq) txq.oninput = () => { state.txQuery = txq.value; rerenderTx(); };
   root.querySelectorAll("[data-txtype]").forEach((b) => b.onclick = () => { state.txType = b.dataset.txtype; rerenderTx(); });
+  root.querySelectorAll("[data-txmonth]").forEach((b) => b.onclick = () => { state.txMonth = b.dataset.txmonth; rerenderTx(); });
+  root.querySelectorAll("[data-ledgermonth]").forEach((b) => b.onclick = () => { state.ledgerMonth = b.dataset.ledgermonth; rerenderLedgers(); });
   const lq = document.getElementById("lq");
   if (lq) lq.oninput = () => { state.ledgerQuery = lq.value; rerenderLedgers(); };
   root.querySelectorAll("[data-agent]").forEach((b) => b.onclick = () => { state.selectedAgent = b.dataset.agent; rerenderLedgers(); });
   root.querySelectorAll("[data-save]").forEach((b) => b.onclick = () => saveTeamRow(b.closest("tr")));
+  const nd = document.getElementById("newdeal");
+  if (nd) nd.onclick = () => { state.dealForm = emptyDealForm(); render(); };
+  root.querySelectorAll("[data-editdeal]").forEach((b) => b.onclick = () => {
+    const d = state.deals.find((x) => x.id === b.dataset.editdeal);
+    if (d) { state.dealForm = dealFormFromRow(d); render(); }
+  });
+  root.querySelectorAll("[data-deletedeal]").forEach((b) => b.onclick = () => deleteDeal(b.dataset.deletedeal));
+  const pwo = document.getElementById("pwopen");
+  if (pwo) pwo.onclick = () => { state.pwForm = true; render(); };
+  wireModals();
+}
+
+function wireModals() {
+  const closeDeal = () => { collectDealForm(); state.dealForm = null; render(); };
+  const dc = document.getElementById("dealclose"); if (dc) dc.onclick = () => { state.dealForm = null; render(); };
+  const dca = document.getElementById("dealcancel"); if (dca) dca.onclick = () => { state.dealForm = null; render(); };
+  const ds = document.getElementById("dealsave"); if (ds) ds.onclick = saveDeal;
+  ["f_total_commission", "f_commission_received", "f_agent2"].forEach((id) => {
+    const el = document.getElementById(id); if (el) el.oninput = dealAutoMath;
+  });
+  ["f_tc_start", "f_duration"].forEach((id) => {
+    const el = document.getElementById(id); if (el) el.oninput = dealAutoEnd;
+  });
+  const pc = document.getElementById("pwclose"); if (pc) pc.onclick = () => { state.pwForm = false; render(); };
+  const pca = document.getElementById("pwcancel"); if (pca) pca.onclick = () => { state.pwForm = false; render(); };
+  const ps = document.getElementById("pwsave"); if (ps) ps.onclick = savePassword;
 }
 function rerenderTx() {
   const main = root.querySelector("main"); const focus = document.activeElement === document.getElementById("txq");
