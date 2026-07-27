@@ -67,30 +67,47 @@ function renderLogin(msg) {
       <div class="login-access">
         <span class="login-kicker">Private business system</span>
         <h1 class="login-title">Sign in</h1>
-        <p class="login-intro">Enter your work email. We'll send a one-tap sign-in link — no password to remember.</p>
+        <p class="login-intro">Sign in with your work email and password.</p>
         <div class="login-field">
           <label for="email">Work email</label>
           <input class="input" id="email" type="email" autocomplete="email" placeholder="you@xsite.example">
         </div>
-        <div class="login-actions">
-          <button class="btn btn-primary" id="send" style="width:100%">Send sign-in link</button>
+        <div class="login-field" style="margin-top:14px">
+          <label for="password">Password</label>
+          <input class="input" id="password" type="password" autocomplete="current-password" placeholder="Your password">
         </div>
+        <div class="login-actions">
+          <button class="btn btn-primary" id="signin" style="width:100%">Sign in</button>
+        </div>
+        <p class="login-msg" style="margin-top:14px"><a id="send" style="cursor:pointer">Email me a sign-in link instead</a></p>
         <p class="login-msg ${msg ? msg.kind : ""}" id="msg">${msg ? esc(msg.text) : ""}</p>
         <p class="login-security-note">Authorized Xsite personnel only · Dubai, UAE</p>
       </div>
     </div>
   </div>`;
+  const remembered = { email: document.getElementById("email") };
+  document.getElementById("signin").onclick = signInPassword;
   document.getElementById("send").onclick = sendLink;
-  document.getElementById("email").addEventListener("keydown", (e) => { if (e.key === "Enter") sendLink(); });
+  document.getElementById("password").addEventListener("keydown", (e) => { if (e.key === "Enter") signInPassword(); });
+  if (msg && msg.email) remembered.email.value = msg.email;
+}
+
+async function signInPassword() {
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+  if (!email || !password) { renderLogin({ kind: "is-error", text: "Enter your email and password.", email }); return; }
+  const btn = document.getElementById("signin"); btn.disabled = true; btn.textContent = "Signing in…";
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) { renderLogin({ kind: "is-error", text: error.message, email }); return; }
+  await resolveProfile(data.session); await loadData(); render();
 }
 
 async function sendLink() {
   const email = document.getElementById("email").value.trim();
-  if (!email) { renderLogin({ kind: "is-error", text: "Enter your work email." }); return; }
-  const btn = document.getElementById("send"); btn.disabled = true; btn.textContent = "Sending…";
+  if (!email) { renderLogin({ kind: "is-error", text: "Enter your work email first." }); return; }
   const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.href } });
-  if (error) { renderLogin({ kind: "is-error", text: error.message }); }
-  else { renderLogin({ kind: "is-ok", text: "Check your email for the sign-in link." }); }
+  if (error) { renderLogin({ kind: "is-error", text: error.message, email }); }
+  else { renderLogin({ kind: "is-ok", text: "Check your email for the sign-in link.", email }); }
 }
 
 // ── render: app shell ────────────────────────────────────
@@ -120,7 +137,10 @@ function renderApp() {
   else body = viewDashboard();
   root.innerHTML = nav + `<main>${body}</main>`;
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
-  document.getElementById("logout").onclick = async () => { await supabase.auth.signOut(); };
+  document.getElementById("logout").onclick = async () => {
+    try { await supabase.auth.signOut({ scope: "local" }); } catch {}
+    state.profile = null; render();
+  };
   wireScreen();
 }
 
