@@ -632,7 +632,8 @@ function viewContracts() {
 }
 
 function contractInput(id, label, value, type = "text", extra = "") {
-  return `<div class="field"><label for="${id}">${label}</label><input class="input" id="${id}" type="${type}" value="${esc(value ?? "")}" ${extra}></div>`;
+  const lengthLimit = ["text", "email", "tel"].includes(type) && !extra.includes("maxlength") ? 'maxlength="300"' : "";
+  return `<div class="field"><label for="${id}">${label}</label><input class="input" id="${id}" type="${type}" value="${esc(value ?? "")}" ${lengthLimit} ${extra}></div>`;
 }
 
 function viewContractModal() {
@@ -654,11 +655,11 @@ function viewContractModal() {
       ${contractInput("ct_plot","Plot no.",d.plotNo)}${contractInput("ct_makani","Makani no.",d.makaniNo)}${contractInput("ct_building","Building",d.buildingName)}${contractInput("ct_unit","Property / unit no.",d.propertyNo)}
       <div class="field"><label for="ct_property_type">Property use</label><select class="input" id="ct_property_type">${["Residential","Commercial","Industrial"].map((type)=>`<option value="${type}" ${type === (d.propertyType || "Residential") ? "selected" : ""}>${type}</option>`).join("")}</select></div>
       ${contractInput("ct_unit_type","Unit type",d.unitType)}${contractInput("ct_area_sqm","Area (sq.m)",d.propertyArea,"number",'min="0" step="0.01"')}${contractInput("ct_location","Location",d.location)}${contractInput("ct_premises_no","Premises no. (DEWA)",d.premisesNo)}
-      <div class="field" style="grid-column:1/-1"><label for="ct_terms">Additional terms</label><textarea class="input" id="ct_terms" rows="4">${esc(f.additional_terms || "")}</textarea></div>
+      <div class="field" style="grid-column:1/-1"><label for="ct_terms">Additional terms</label><textarea class="input" id="ct_terms" rows="4" maxlength="12000">${esc(f.additional_terms || "")}</textarea></div>
     </div></div>
     <div class="contract-form-section"><h4>Xsite addendum</h4><div class="form-grid">
       ${contractInput("ct_furnishing","Furnishing",a.furnishing)}${contractInput("ct_add_premises","Premises description",a.premises)}${contractInput("ct_add_unit","Unit number",a.unitNo)}${contractInput("ct_add_building","Building",a.building)}${contractInput("ct_add_area","Area / community",a.area)}${contractInput("ct_add_city","City / emirate",a.city)}
-      <div class="field" style="grid-column:1/-1"><label for="ct_add_terms">Custom addendum conditions</label><textarea class="input" id="ct_add_terms" rows="5">${esc(a.customTerms || "")}</textarea></div>
+      <div class="field" style="grid-column:1/-1"><label for="ct_add_terms">Custom addendum conditions</label><textarea class="input" id="ct_add_terms" rows="5" maxlength="12000">${esc(a.customTerms || "")}</textarea></div>
     </div></div>
     <div class="modal-actions"><span class="form-msg" id="contractmsg">${esc(f.msg || "")}</span><button class="btn btn-secondary" id="contractcancel">Cancel</button><button class="btn btn-secondary" id="contractdraft">Save draft</button><button class="btn btn-primary" id="contractfinal">Finalize & notify Accounts</button></div>
     </div></div></div>`;
@@ -1559,7 +1560,18 @@ function wireModals() {
     state.contractForm = contractDraftFromDeal(deal); render();
   };
   const printClose = document.getElementById("printclose"); if (printClose) printClose.onclick = () => { state.printContract = null; render(); };
-  const printNow = document.getElementById("printnow"); if (printNow) printNow.onclick = () => window.print();
+  const printNow = document.getElementById("printnow"); if (printNow) printNow.onclick = async () => {
+    printNow.disabled = true; printNow.textContent = "Preparing pages…";
+    const images = [...document.querySelectorAll(".dld-print-page img")];
+    try {
+      await Promise.all(images.map((image) => image.decode ? image.decode() : new Promise((resolve, reject) => {
+        if (image.complete && image.naturalWidth) resolve();
+        else { image.onload = resolve; image.onerror = reject; }
+      })));
+      window.print();
+    } catch { window.alert("The contract template images did not finish loading. Please try again."); }
+    finally { printNow.disabled = false; printNow.textContent = "Print / Save PDF"; }
+  };
 }
 function rerenderTx() {
   const main = root.querySelector("main"); const focus = document.activeElement === document.getElementById("txq");

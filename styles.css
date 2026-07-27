@@ -276,6 +276,9 @@ table.grid.wide { min-width: 1700px; }
   body:has(.contract-print-shell) .contract-print-toolbar { display: none !important; }
   body:has(.contract-print-shell) .contract-print-shell { position: absolute; inset: 0; overflow: visible; padding: 0; background: #fff; }
   body:has(.contract-print-shell) .dld-print-page { width: 210mm; height: 297mm; margin: 0; box-shadow: none; break-after: page; page-break-after: always; }
+  body:has(.contract-print-shell) .dld-print-page:last-child { break-after: auto; page-break-after: auto; }
+  body:has(.contract-print-shell) .dld-print-page,
+  body:has(.contract-print-shell) .dld-print-page * { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .nav, .ledger-panel, .tabs, .btn { display: none !important; }
   main { padding: 0; max-width: none; }
   .ledger-layout { display: block; }
