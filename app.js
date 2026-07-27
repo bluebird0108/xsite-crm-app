@@ -8,11 +8,13 @@ const state = {
   profile: null,
   screen: "dashboard",
   authMode: "signin",
-  agents: [], deals: [], commission: [], cash: [], team: [],
+  agents: [], deals: [], commission: [], cash: [], team: [], docs: [],
   selectedAgent: null,
   txQuery: "", txType: "All", ledgerQuery: "",
   txMonth: null, ledgerMonth: null,
-  dealForm: null, pwForm: false,
+  invMonth: null, invType: "All", invQuery: "",
+  cashDate: null,
+  dealForm: null, pwForm: false, docForm: null, cashForm: null,
 };
 
 const MONTH_LABELS = { "01":"January","02":"February","03":"March","04":"April","05":"May","06":"June","07":"July","08":"August","09":"September","10":"October","11":"November","12":"December" };
@@ -37,22 +39,28 @@ const roleIn = (...r) => r.includes(state.profile?.role);
 // ── data ─────────────────────────────────────────────────
 async function loadData() {
   if (roleIn("pending")) { state.agents = []; state.deals = []; state.commission = []; state.cash = []; state.team = []; return; }
-  const [ag, dl, cm, ch, tm] = await Promise.all([
+  const [ag, dl, cm, ch, tm, md] = await Promise.all([
     supabase.from("agents").select("*").order("name"),
     supabase.from("deals").select("*").order("sno"),
     supabase.from("commission_entries").select("*").order("agent_name"),
     roleIn("owner", "accounts") ? supabase.from("cash_position").select("*").order("sort_order") : Promise.resolve({ data: [] }),
     roleIn("owner") ? supabase.from("profiles").select("*").order("created_at") : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin") ? supabase.from("money_docs").select("*").order("doc_no") : Promise.resolve({ data: [] }),
   ]);
   state.agents = ag.data || [];
   state.deals = dl.data || [];
   state.commission = cm.data || [];
   state.cash = ch.data || [];
   state.team = tm.data || [];
+  state.docs = md.data || [];
   const months = availableMonths(state.deals, "month");
   if (!state.txMonth || !months.includes(state.txMonth)) state.txMonth = months[0] || null;
   const lmonths = availableMonths(state.commission, "month");
   if (!state.ledgerMonth || !lmonths.includes(state.ledgerMonth)) state.ledgerMonth = lmonths[0] || null;
+  const imonths = availableMonths(state.docs, "month");
+  if (!state.invMonth || !imonths.includes(state.invMonth)) state.invMonth = imonths[0] || months[0] || null;
+  const cdates = availableMonths(state.cash, "as_at");
+  if (!state.cashDate || !cdates.includes(state.cashDate)) state.cashDate = cdates[0] || null;
 }
 
 async function reloadDeals() {
@@ -62,6 +70,18 @@ async function reloadDeals() {
   ]);
   state.deals = dl.data || [];
   state.commission = cm.data || [];
+}
+
+async function reloadDocs() {
+  const { data } = await supabase.from("money_docs").select("*").order("doc_no");
+  state.docs = data || [];
+}
+
+async function reloadCash() {
+  const { data } = await supabase.from("cash_position").select("*").order("sort_order");
+  state.cash = data || [];
+  const cdates = availableMonths(state.cash, "as_at");
+  state.cashDate = cdates[0] || null;
 }
 
 // ── auth ─────────────────────────────────────────────────
@@ -180,6 +200,7 @@ function renderApp() {
     <div class="nav-brand"><img src="./xsite-logo.png" alt="Xsite"></div>
     ${roleIn("pending") ? "" : navLink("dashboard", "Dashboard")}
     ${showTx ? navLink("transactions", "Transactions") : ""}
+    ${roleIn("owner", "accounts", "admin") ? navLink("invoices", "Invoices & Receipts") : ""}
     ${showLedger ? navLink("ledgers", ledgerLabel) : ""}
     ${showTeam ? navLink("team", pendingTeam ? `Team (${pendingTeam})` : "Team") : ""}
     <div class="nav-right">
@@ -192,10 +213,11 @@ function renderApp() {
   let body = "";
   if (roleIn("pending")) body = viewPending();
   else if (state.screen === "transactions" && showTx) body = viewTransactions();
+  else if (state.screen === "invoices" && roleIn("owner", "accounts", "admin")) body = viewInvoices();
   else if (state.screen === "ledgers" && showLedger) body = viewLedgers();
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal();
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
@@ -300,10 +322,21 @@ function viewDashboard() {
     <div class="md-kpi"><span class="card-kicker">Total commission</span><span class="md-kpi-value">${money(Math.round(totc))}</span><span class="md-kpi-detail">Incl. third-party share</span></div>
     <div class="md-kpi"><span class="card-kicker">Expiring ≤90 days</span><span class="md-kpi-value">${expiringSoon}</span><span class="md-kpi-detail">${tiers[0].items.length} already expired</span></div>
   </section>`;
+  const cashDates = availableMonths(state.cash, "as_at");
+  const cashRows = state.cash.filter((c) => c.as_at === state.cashDate);
+  const isLatestCash = state.cashDate === cashDates[0];
+  const cashDateOpts = cashDates.map((d) =>
+    `<option value="${d}" ${d === state.cashDate ? "selected" : ""}>${showDate(d)}${d === cashDates[0] ? " (latest)" : ""}</option>`).join("");
   const cashCard = roleIn("owner", "accounts") ? `
     <section class="md-section">
-      <div class="md-section-header"><h3>Cash position</h3><span class="text-muted" style="font-size:11px">As at ${state.cash[0] ? showDate(state.cash[0].as_at) : ""}</span></div>
-      ${state.cash.map((c) => `<div class="cash-row ${/remaining/i.test(c.label) ? "is-remaining" : /total/i.test(c.label) ? "is-total" : ""}"><span>${esc(c.label)}</span><strong>${money(c.amount)}</strong></div>`).join("")}
+      <div class="md-section-header"><h3>Cash position</h3>
+        <span style="display:flex;gap:8px;align-items:center">
+          ${cashDates.length > 1 ? `<select class="input" id="cashdate" style="padding:5px 8px;font-size:12px;width:auto">${cashDateOpts}</select>` : `<span class="text-muted" style="font-size:11px">As at ${showDate(state.cashDate)}</span>`}
+          <button class="btn btn-secondary btn-mini" id="cashedit">Update cash</button>
+        </span>
+      </div>
+      ${!isLatestCash ? `<p class="text-muted" style="font-size:11px;margin:0 0 8px">Historical snapshot — latest is ${showDate(cashDates[0])}.</p>` : ""}
+      ${cashRows.map((c) => `<div class="cash-row ${/remaining/i.test(c.label) ? "is-remaining" : /total/i.test(c.label) ? "is-total" : ""}"><span>${esc(c.label)}</span><strong>${money(c.amount)}</strong></div>`).join("")}
     </section>` : "";
   const expiryCard = `
     <section class="md-section">
@@ -586,6 +619,246 @@ async function deleteDeal(id) {
   render();
 }
 
+// ── view: invoices & receipts ────────────────────────────
+function dealGroupOptions() {
+  const seen = new Set();
+  return state.deals.filter((d) => !seen.has(d.group_id) && seen.add(d.group_id))
+    .map((d) => ({ group: d.group_id, label: `${d.sno ?? "—"} · ${d.unit || ""} ${d.building || ""} — ${d.agent}`.trim(), deal: d }));
+}
+function dealLabelFor(group) {
+  const opt = dealGroupOptions().find((o) => o.group === group);
+  return opt ? opt.label : "(deal removed)";
+}
+function viewInvoices() {
+  const canEdit = roleIn("owner", "accounts");
+  const months = [...new Set([...availableMonths(state.docs, "month"), ...availableMonths(state.deals, "month")])].sort().reverse();
+  const monthTabs = months.map((m) =>
+    `<button class="tab ${state.invMonth === m ? "is-active" : ""}" data-invmonth="${m}">${monthLabel(m)}</button>`).join("");
+  const typeTabs = ["All", "Invoices", "Receipts"].map((t) =>
+    `<button class="tab ${state.invType === t ? "is-active" : ""}" data-invtype="${t}">${t}</button>`).join("");
+  const q = state.invQuery.trim().toLowerCase();
+  const rows = state.docs.filter((d) =>
+    (!state.invMonth || d.month === state.invMonth) &&
+    (state.invType === "All" || (state.invType === "Invoices" ? d.doc_type === "invoice" : d.doc_type === "receipt")) &&
+    (!q || [d.doc_no, d.client, d.description, d.payment_method, dealLabelFor(d.deal_group)].join(" ").toLowerCase().includes(q)));
+  const monthDocs = state.docs.filter((d) => d.month === state.invMonth);
+  const sumWhere = (fn) => monthDocs.filter(fn).reduce((s, d) => s + (+d.amount || 0), 0);
+  const received = sumWhere((d) => d.doc_type === "receipt");
+  const invoiced = sumWhere((d) => d.doc_type === "invoice");
+  const pending = sumWhere((d) => d.doc_type === "invoice" && d.status === "pending");
+  const statusTag = (d) => d.status === "pending" ? `<span class="tag tag-accent">pending</span>`
+    : `<span class="tag tag-neutral">${esc(d.status)}</span>`;
+  const body = rows.map((d) => `<tr>
+    <td>${esc(d.doc_no)}</td><td>${esc(showDate(d.doc_date))}</td>
+    <td>${d.doc_type === "invoice" ? "Invoice" : "Receipt"}</td>
+    <td>${esc(dealLabelFor(d.deal_group))}</td>
+    <td>${esc(d.client || "—")}</td><td>${esc(d.description || "—")}</td>
+    <td class="numeric">${money(d.amount)}</td>
+    <td>${statusTag(d)}</td><td>${esc(d.payment_method || "—")}</td>
+    ${canEdit ? `<td><div class="row-actions">
+      ${d.doc_type === "invoice" && d.status === "pending" ? `<button class="btn btn-primary btn-mini" data-markpaid="${d.id}">Mark paid</button>` : ""}
+      <button class="btn btn-secondary btn-mini" data-editdoc="${d.id}">Edit</button>
+      <button class="btn btn-secondary btn-mini" data-deletedoc="${d.id}">Delete</button>
+    </div></td>` : ""}</tr>`).join("");
+  return `
+  <div>
+    <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div><span class="card-kicker">Accounts / Money</span><h1 style="margin-top:4px">Invoices &amp; Receipts</h1><p class="text-muted" style="margin:0">Every document links to a register deal — ${monthLabel(state.invMonth)}.</p></div>
+      <button class="btn btn-primary" id="newdoc">+ New receipt / invoice</button>
+    </div>
+    <section class="md-kpi-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:20px">
+      <div class="md-kpi is-accent"><span class="card-kicker">Receipts — ${monthLabel(state.invMonth)}</span><span class="md-kpi-value">${money(Math.round(received))}</span><span class="md-kpi-detail">${monthDocs.filter((d)=>d.doc_type==="receipt").length} receipts recorded</span></div>
+      <div class="md-kpi"><span class="card-kicker">Invoiced</span><span class="md-kpi-value">${money(Math.round(invoiced))}</span><span class="md-kpi-detail">${monthDocs.filter((d)=>d.doc_type==="invoice").length} invoices raised</span></div>
+      <div class="md-kpi"><span class="card-kicker">Pending invoices</span><span class="md-kpi-value">${money(Math.round(pending))}</span><span class="md-kpi-detail">${monthDocs.filter((d)=>d.doc_type==="invoice"&&d.status==="pending").length} awaiting payment</span></div>
+    </section>
+    <div class="tx-toolbar">
+      ${months.length ? `<div class="tabs">${monthTabs}</div>` : ""}
+      <input class="input" id="invq" type="search" placeholder="Search doc no, client, deal…" value="${esc(state.invQuery)}">
+      <div class="tabs">${typeTabs}</div>
+      <span class="text-muted" style="font-size:12px">${rows.length} documents</span>
+    </div>
+    <div class="sheet">
+      <div class="sheet-hint">Documents — newest number first</div>
+      <div class="table-wrap"><table class="grid" style="min-width:1100px">
+        <thead><tr><th>Doc no</th><th>Date</th><th>Type</th><th>Deal</th><th>Client</th><th>Description</th><th>Amount</th><th>Status</th><th>Payment</th>${canEdit ? "<th></th>" : ""}</tr></thead>
+        <tbody>${body || `<tr><td colspan="10"><div class="md-empty" style="border:0">No documents in ${monthLabel(state.invMonth)} yet.</div></td></tr>`}</tbody>
+      </table></div>
+    </div>
+  </div>`;
+}
+
+// ── doc modal ────────────────────────────────────────────
+function nextDocNo(type) {
+  const prefix = type === "invoice" ? "INV-" : "RCT-";
+  const max = state.docs.filter((d) => d.doc_type === type)
+    .reduce((m, d) => Math.max(m, parseInt(String(d.doc_no).replace(/\D/g, "")) || 0), 1000);
+  return prefix + (max + 1);
+}
+function emptyDocForm() {
+  return { id: null, doc_type: "receipt", dealLabel: "", client: "", description: "",
+    amount: "", doc_date: new Date().toISOString().slice(0, 10), payment_method: "", msg: "" };
+}
+function docFormFromRow(d) {
+  return { id: d.id, doc_type: d.doc_type, dealLabel: dealLabelFor(d.deal_group),
+    client: d.client || "", description: d.description || "", amount: d.amount ?? "",
+    doc_date: d.doc_date || "", payment_method: d.payment_method || "", msg: "", status: d.status };
+}
+function viewDocModal() {
+  const f = state.docForm;
+  if (!f) return "";
+  const opts = dealGroupOptions();
+  const dl = `<datalist id="deallist">${opts.map((o) => `<option value="${esc(o.label)}">`).join("")}</datalist>`;
+  return `
+  <div class="modal-backdrop">
+    <div class="modal" style="width:min(640px,100%)" role="dialog" aria-labelledby="doctitle">
+      <div class="modal-head"><h3 id="doctitle">${f.id ? "Edit document" : "New receipt / invoice"}</h3><button class="modal-close" id="docclose" aria-label="Close">×</button></div>
+      <div class="modal-body">${dl}
+        <div class="form-grid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+          <div class="field"><label for="d_type">Type</label>
+            <select class="input" id="d_type">
+              <option value="receipt" ${f.doc_type === "receipt" ? "selected" : ""}>Receipt — money received</option>
+              <option value="invoice" ${f.doc_type === "invoice" ? "selected" : ""}>Invoice — payment requested</option>
+            </select></div>
+          <div class="field"><label for="d_date">Date</label><input class="input" id="d_date" type="date" value="${esc(f.doc_date)}"></div>
+          <div class="field" style="grid-column:1/-1"><label for="d_deal">Deal (required — type to search the register)</label>
+            <input class="input" id="d_deal" list="deallist" value="${esc(f.dealLabel)}" placeholder="e.g. 47 · 208 Herad Tower — Saheer Salim"></div>
+          <div class="field"><label for="d_client">Client</label><input class="input" id="d_client" value="${esc(f.client)}"></div>
+          <div class="field"><label for="d_amount">Amount (AED)</label><input class="input" id="d_amount" type="number" value="${esc(f.amount)}"></div>
+          <div class="field" style="grid-column:1/-1"><label for="d_desc">Description</label><input class="input" id="d_desc" value="${esc(f.description)}"></div>
+          <div class="field" style="grid-column:1/-1"><label for="d_pay">Payment method / reference</label><input class="input" id="d_pay" value="${esc(f.payment_method)}"></div>
+          <div class="form-note">Picking a deal pre-fills client, description, and amount — edit freely. Receipts save as received; invoices start pending.</div>
+        </div>
+        <div class="modal-actions">
+          <span class="form-msg" id="docmsg">${esc(f.msg)}</span>
+          <button class="btn btn-secondary" id="doccancel">Cancel</button>
+          <button class="btn btn-primary" id="docsave">${f.id ? "Save changes" : "Save"}</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+function docPrefill() {
+  const label = document.getElementById("d_deal").value;
+  const opt = dealGroupOptions().find((o) => o.label === label);
+  if (!opt) return;
+  const d = opt.deal;
+  const setIfEmpty = (id, v) => { const el = document.getElementById(id); if (el && !el.value) el.value = v ?? ""; };
+  setIfEmpty("d_client", d.tenant || d.landlord || "");
+  setIfEmpty("d_desc", `Commission — ${d.unit || ""} ${d.building || ""}`.trim());
+  setIfEmpty("d_amount", d.commission_received ?? "");
+}
+async function saveDoc() {
+  const f = state.docForm;
+  const g = (id) => document.getElementById(id).value;
+  const label = g("d_deal");
+  const opt = dealGroupOptions().find((o) => o.label === label);
+  const msgEl = document.getElementById("docmsg");
+  if (!opt) { msgEl.textContent = "Pick a deal from the register list."; return; }
+  if (!g("d_amount") || !g("d_date")) { msgEl.textContent = "Date and amount are required."; return; }
+  const type = g("d_type");
+  const btn = document.getElementById("docsave"); btn.disabled = true; btn.textContent = "Saving…";
+  const rec = {
+    doc_type: type, deal_group: opt.group, client: g("d_client") || null,
+    description: g("d_desc") || null, amount: parseFloat(g("d_amount")),
+    doc_date: g("d_date"), month: g("d_date").slice(0, 7),
+    payment_method: g("d_pay") || null,
+    status: type === "receipt" ? "received" : (f.status === "paid" ? "paid" : "pending"),
+  };
+  let error;
+  if (f.id) ({ error } = await supabase.from("money_docs").update(rec).eq("id", f.id));
+  else ({ error } = await supabase.from("money_docs").insert({ ...rec, doc_no: nextDocNo(type) }));
+  if (error) { msgEl.textContent = error.message; btn.disabled = false; btn.textContent = "Save"; return; }
+  await reloadDocs();
+  state.invMonth = rec.month;
+  state.docForm = null;
+  render();
+}
+async function markPaid(id) {
+  const { error } = await supabase.from("money_docs").update({ status: "paid" }).eq("id", id);
+  if (error) { window.alert("Could not update: " + error.message); return; }
+  await reloadDocs(); render();
+}
+async function deleteDoc(id) {
+  const d = state.docs.find((x) => x.id === id);
+  if (!d || !window.confirm(`Delete ${d.doc_no} (${money(d.amount)})?`)) return;
+  const { error } = await supabase.from("money_docs").delete().eq("id", id);
+  if (error) { window.alert("Could not delete: " + error.message); return; }
+  await reloadDocs(); render();
+}
+
+// ── cash snapshot modal ──────────────────────────────────
+function viewCashModal() {
+  const f = state.cashForm;
+  if (!f) return "";
+  const rows = f.lines.map((l, i) => `
+    <tr>
+      <td><input class="input" data-cl-label="${i}" value="${esc(l.label)}" style="min-width:260px"></td>
+      <td><input class="input" data-cl-amount="${i}" type="number" value="${esc(l.amount ?? "")}" placeholder="—"></td>
+      <td><button class="btn btn-secondary btn-mini" data-cl-remove="${i}">Remove</button></td>
+    </tr>`).join("");
+  return `
+  <div class="modal-backdrop">
+    <div class="modal" style="width:min(680px,100%)" role="dialog" aria-labelledby="cashtitle">
+      <div class="modal-head"><h3 id="cashtitle">Update cash position</h3><button class="modal-close" id="cashclose" aria-label="Close">×</button></div>
+      <div class="modal-body">
+        <div class="form-grid" style="grid-template-columns:1fr 1fr">
+          <div class="field"><label for="c_asat">As at date</label><input class="input" id="c_asat" type="date" value="${esc(f.as_at)}"></div>
+          <div class="form-note" style="align-self:end">Saving records a new snapshot for this date. Earlier snapshots stay in history.</div>
+        </div>
+        <table class="grid" style="margin-top:12px;width:100%">
+          <thead><tr><th>Line</th><th>Amount (AED)</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <button class="btn btn-secondary btn-mini" id="cashaddline" style="margin-top:10px">+ Add line</button>
+        <div class="modal-actions">
+          <span class="form-msg" id="cashmsg">${esc(f.msg || "")}</span>
+          <button class="btn btn-secondary" id="cashcancel">Cancel</button>
+          <button class="btn btn-primary" id="cashsave">Save snapshot</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+function collectCashForm() {
+  const f = state.cashForm;
+  if (!f) return;
+  f.as_at = document.getElementById("c_asat").value;
+  f.lines.forEach((l, i) => {
+    l.label = document.querySelector(`[data-cl-label="${i}"]`)?.value ?? l.label;
+    const amt = document.querySelector(`[data-cl-amount="${i}"]`)?.value;
+    l.amount = amt === "" || amt === undefined ? null : parseFloat(amt);
+  });
+}
+function openCashForm() {
+  const dates = availableMonths(state.cash, "as_at");
+  const latest = state.cash.filter((c) => c.as_at === dates[0]);
+  state.cashForm = {
+    as_at: new Date().toISOString().slice(0, 10),
+    lines: latest.map((c) => ({ label: c.label, amount: c.amount === null ? null : +c.amount })),
+    msg: "",
+  };
+  render();
+}
+async function saveCashSnapshot() {
+  collectCashForm();
+  const f = state.cashForm;
+  const msgEl = document.getElementById("cashmsg");
+  const lines = f.lines.filter((l) => l.label.trim());
+  if (!f.as_at || !lines.length) { msgEl.textContent = "Date and at least one line are required."; return; }
+  const btn = document.getElementById("cashsave"); btn.disabled = true; btn.textContent = "Saving…";
+  const existing = state.cash.filter((c) => c.as_at === f.as_at);
+  if (existing.length) {
+    const del = await supabase.from("cash_position").delete().eq("as_at", f.as_at);
+    if (del.error) { msgEl.textContent = del.error.message; btn.disabled = false; btn.textContent = "Save snapshot"; return; }
+  }
+  const rows = lines.map((l, i) => ({ as_at: f.as_at, label: l.label.trim(), amount: l.amount, sort_order: i, month: f.as_at.slice(0, 7) }));
+  const { error } = await supabase.from("cash_position").insert(rows);
+  if (error) { msgEl.textContent = error.message; btn.disabled = false; btn.textContent = "Save snapshot"; return; }
+  await reloadCash();
+  state.cashForm = null;
+  render();
+}
+
 // ── password modal ───────────────────────────────────────
 function viewPwModal() {
   if (!state.pwForm) return "";
@@ -680,6 +953,28 @@ function wireScreen() {
   root.querySelectorAll("[data-deletedeal]").forEach((b) => b.onclick = () => deleteDeal(b.dataset.deletedeal));
   const pwo = document.getElementById("pwopen");
   if (pwo) pwo.onclick = () => { state.pwForm = true; render(); };
+  // invoices & receipts
+  root.querySelectorAll("[data-invmonth]").forEach((b) => b.onclick = () => { state.invMonth = b.dataset.invmonth; render(); });
+  root.querySelectorAll("[data-invtype]").forEach((b) => b.onclick = () => { state.invType = b.dataset.invtype; render(); });
+  const invq = document.getElementById("invq");
+  if (invq) invq.oninput = () => {
+    state.invQuery = invq.value;
+    const main = root.querySelector("main"); main.innerHTML = viewInvoices(); wireScreen();
+    const el = document.getElementById("invq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
+  };
+  const ndoc = document.getElementById("newdoc");
+  if (ndoc) ndoc.onclick = () => { state.docForm = emptyDocForm(); render(); };
+  root.querySelectorAll("[data-editdoc]").forEach((b) => b.onclick = () => {
+    const d = state.docs.find((x) => x.id === b.dataset.editdoc);
+    if (d) { state.docForm = docFormFromRow(d); render(); }
+  });
+  root.querySelectorAll("[data-deletedoc]").forEach((b) => b.onclick = () => deleteDoc(b.dataset.deletedoc));
+  root.querySelectorAll("[data-markpaid]").forEach((b) => b.onclick = () => markPaid(b.dataset.markpaid));
+  // cash
+  const ce = document.getElementById("cashedit");
+  if (ce) ce.onclick = openCashForm;
+  const cd = document.getElementById("cashdate");
+  if (cd) cd.onchange = () => { state.cashDate = cd.value; render(); };
   wireModals();
 }
 
@@ -697,6 +992,20 @@ function wireModals() {
   const pc = document.getElementById("pwclose"); if (pc) pc.onclick = () => { state.pwForm = false; render(); };
   const pca = document.getElementById("pwcancel"); if (pca) pca.onclick = () => { state.pwForm = false; render(); };
   const ps = document.getElementById("pwsave"); if (ps) ps.onclick = savePassword;
+  // doc modal
+  const dxc = document.getElementById("docclose"); if (dxc) dxc.onclick = () => { state.docForm = null; render(); };
+  const dxa = document.getElementById("doccancel"); if (dxa) dxa.onclick = () => { state.docForm = null; render(); };
+  const dxs = document.getElementById("docsave"); if (dxs) dxs.onclick = saveDoc;
+  const ddeal = document.getElementById("d_deal"); if (ddeal) ddeal.onchange = docPrefill;
+  // cash modal
+  const cxc = document.getElementById("cashclose"); if (cxc) cxc.onclick = () => { state.cashForm = null; render(); };
+  const cxa = document.getElementById("cashcancel"); if (cxa) cxa.onclick = () => { state.cashForm = null; render(); };
+  const cxs = document.getElementById("cashsave"); if (cxs) cxs.onclick = saveCashSnapshot;
+  const cal = document.getElementById("cashaddline");
+  if (cal) cal.onclick = () => { collectCashForm(); state.cashForm.lines.push({ label: "", amount: null }); render(); };
+  document.querySelectorAll("[data-cl-remove]").forEach((b) => b.onclick = () => {
+    collectCashForm(); state.cashForm.lines.splice(+b.dataset.clRemove, 1); render();
+  });
 }
 function rerenderTx() {
   const main = root.querySelector("main"); const focus = document.activeElement === document.getElementById("txq");
