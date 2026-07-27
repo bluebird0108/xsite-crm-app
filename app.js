@@ -1,29 +1,32 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.110.9";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
+import {
+  availableDates,
+  availableMonths,
+  calculateContractEnd,
+  calculateDealCommission,
+  getStaffPermitStatus,
+  monthLabel,
+  toCsv,
+} from "./core.js";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const root = document.getElementById("root");
 
 const state = {
   profile: null,
+  fatalError: null,
   screen: "dashboard",
   authMode: "signin",
-  agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [],
+  agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [], requests: [],
   selectedAgent: null,
   txQuery: "", txType: "All", ledgerQuery: "",
   txMonth: null, ledgerMonth: null,
   invMonth: null, invType: "All", invQuery: "",
   cashDate: null,
-  staffQuery: "", staffBranch: "All",
-  dealForm: null, pwForm: false, docForm: null, cashForm: null,
+  staffQuery: "", staffBranch: "All", requestStatus: "All",
+  dealForm: null, pwForm: false, docForm: null, cashForm: null, requestForm: null,
 };
-
-const MONTH_LABELS = { "01":"January","02":"February","03":"March","04":"April","05":"May","06":"June","07":"July","08":"August","09":"September","10":"October","11":"November","12":"December" };
-function monthLabel(m) { if (!m) return "—"; const [y, mm] = m.split("-"); return `${MONTH_LABELS[mm] || mm} ${y}`; }
-function availableMonths(rows, key) {
-  const set = new Set(rows.map((r) => r[key]).filter(Boolean));
-  return [...set].sort().reverse();
-}
 
 // ── helpers ──────────────────────────────────────────────
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
@@ -36,71 +39,144 @@ function showDate(iso, raw) {
   return raw || "—";
 }
 const roleIn = (...r) => r.includes(state.profile?.role);
+function requireData(result, label) {
+  if (result.error) throw new Error(`${label}: ${result.error.message}`);
+  return result.data || [];
+}
+function clearSensitiveState() {
+  state.profile = null;
+  state.agents = []; state.deals = []; state.commission = []; state.cash = [];
+  state.team = []; state.docs = []; state.staff = []; state.requests = [];
+  state.dealForm = null; state.pwForm = false; state.docForm = null;
+  state.cashForm = null; state.requestForm = null;
+}
+const COLUMNS = {
+  agents: "id,name,role,month,agent_business_including_vat",
+  deals: "id,group_id,sno,deal_date,deal_date_raw,agent,agent2,third_party,deal_type,unit,building,area,price,total_commission,commission_received,vat,commission_ex_vat,agent_business,company_share,agent_share,payment_method,tc_start,tc_start_raw,contract_duration,tc_end,tc_end_raw,security_deposit,cheque_count,landlord,tenant,bank,month",
+  commission_entries: "id,group_id,agent_name,entry_date,entry_date_raw,third_party,agent2,deal_type,unit,building,area,annual_value,total_commission,received,vat,commission_ex_vat,agent_business,xsite_share,agent_share,month",
+  cash_position: "id,as_at,label,amount,sort_order,month",
+  profiles: "id,full_name,email,role,agent_name,created_at",
+  money_docs: "id,doc_type,doc_no,deal_group,doc_date,client,description,amount,payment_method,status,month",
+  staff: "id,name,job,nationality,branch,card_number,card_expiry",
+  agent_requests: "id,created_by,submitter_name,request_type,subject,deal_group,details,status,response,created_at,updated_at",
+};
+async function fetchAll(table, orderColumn, ascending = true) {
+  const rows = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const result = await supabase.from(table).select(COLUMNS[table]).order(orderColumn, { ascending }).range(from, from + pageSize - 1);
+    if (result.error) throw new Error(`Could not load ${table}: ${result.error.message}`);
+    rows.push(...(result.data || []));
+    if ((result.data || []).length < pageSize) break;
+  }
+  return { data: rows, error: null };
+}
+function downloadCsv(filename, rows, columns) {
+  const blob = new Blob(["\uFEFF", toCsv(rows, columns)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url; link.download = filename; link.hidden = true;
+  document.body.appendChild(link); link.click(); link.remove();
+  URL.revokeObjectURL(url);
+}
 
 // ── data ─────────────────────────────────────────────────
 async function loadData() {
-  if (roleIn("pending")) { state.agents = []; state.deals = []; state.commission = []; state.cash = []; state.team = []; return; }
-  const [ag, dl, cm, ch, tm, md, sf] = await Promise.all([
-    supabase.from("agents").select("*").order("name"),
-    supabase.from("deals").select("*").order("sno"),
-    supabase.from("commission_entries").select("*").order("agent_name"),
-    roleIn("owner", "accounts") ? supabase.from("cash_position").select("*").order("sort_order") : Promise.resolve({ data: [] }),
-    roleIn("owner") ? supabase.from("profiles").select("*").order("created_at") : Promise.resolve({ data: [] }),
-    roleIn("owner", "accounts", "admin") ? supabase.from("money_docs").select("*").order("doc_no") : Promise.resolve({ data: [] }),
-    roleIn("owner", "admin") ? supabase.from("staff").select("*").order("name") : Promise.resolve({ data: [] }),
+  state.fatalError = null;
+  if (roleIn("pending")) {
+    state.agents = []; state.deals = []; state.commission = []; state.cash = [];
+    state.team = []; state.docs = []; state.staff = []; state.requests = [];
+    return;
+  }
+  const [ag, dl, cm, ch, tm, md, sf, rq] = await Promise.all([
+    fetchAll("agents", "name"),
+    fetchAll("deals", "sno"),
+    fetchAll("commission_entries", "agent_name"),
+    roleIn("owner", "accounts") ? fetchAll("cash_position", "sort_order") : Promise.resolve({ data: [] }),
+    roleIn("owner") ? fetchAll("profiles", "created_at") : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
+    roleIn("owner", "admin") ? fetchAll("staff", "name") : Promise.resolve({ data: [] }),
+    fetchAll("agent_requests", "created_at", false),
   ]);
-  state.agents = ag.data || [];
-  state.deals = dl.data || [];
-  state.commission = cm.data || [];
-  state.cash = ch.data || [];
-  state.team = tm.data || [];
-  state.docs = md.data || [];
-  state.staff = sf.data || [];
+  state.agents = requireData(ag, "Could not load agents");
+  state.deals = requireData(dl, "Could not load deals");
+  state.commission = requireData(cm, "Could not load commission entries");
+  state.cash = requireData(ch, "Could not load cash position");
+  state.team = requireData(tm, "Could not load team profiles");
+  state.docs = requireData(md, "Could not load invoices and receipts");
+  state.staff = requireData(sf, "Could not load staff directory");
+  state.requests = requireData(rq, "Could not load agent requests");
   const months = availableMonths(state.deals, "month");
   if (!state.txMonth || !months.includes(state.txMonth)) state.txMonth = months[0] || null;
   const lmonths = availableMonths(state.commission, "month");
   if (!state.ledgerMonth || !lmonths.includes(state.ledgerMonth)) state.ledgerMonth = lmonths[0] || null;
   const imonths = availableMonths(state.docs, "month");
   if (!state.invMonth || !imonths.includes(state.invMonth)) state.invMonth = imonths[0] || months[0] || null;
-  const cdates = availableMonths(state.cash, "as_at");
+  const cdates = availableDates(state.cash, "as_at");
   if (!state.cashDate || !cdates.includes(state.cashDate)) state.cashDate = cdates[0] || null;
 }
 
 async function reloadDeals() {
   const [dl, cm] = await Promise.all([
-    supabase.from("deals").select("*").order("sno"),
-    supabase.from("commission_entries").select("*").order("agent_name"),
+    fetchAll("deals", "sno"),
+    fetchAll("commission_entries", "agent_name"),
   ]);
-  state.deals = dl.data || [];
-  state.commission = cm.data || [];
+  state.deals = requireData(dl, "Could not reload deals");
+  state.commission = requireData(cm, "Could not reload commission entries");
 }
 
 async function reloadDocs() {
-  const { data } = await supabase.from("money_docs").select("*").order("doc_no");
-  state.docs = data || [];
+  const result = await fetchAll("money_docs", "doc_no");
+  state.docs = requireData(result, "Could not reload invoices and receipts");
 }
 
 async function reloadCash() {
-  const { data } = await supabase.from("cash_position").select("*").order("sort_order");
-  state.cash = data || [];
-  const cdates = availableMonths(state.cash, "as_at");
+  const result = await fetchAll("cash_position", "sort_order");
+  state.cash = requireData(result, "Could not reload cash position");
+  const cdates = availableDates(state.cash, "as_at");
   state.cashDate = cdates[0] || null;
+}
+
+async function reloadRequests() {
+  const result = await fetchAll("agent_requests", "created_at", false);
+  state.requests = requireData(result, "Could not reload agent requests");
+}
+
+async function reloadAfterWrite(reload, label) {
+  try { await reload(); return true; }
+  catch (error) {
+    state.fatalError = `${label} was saved, but the refreshed data could not be loaded: ${error.message}`;
+    render();
+    return false;
+  }
 }
 
 // ── auth ─────────────────────────────────────────────────
 async function resolveProfile(session) {
   if (!session) { state.profile = null; return; }
-  const { data } = await supabase.from("profiles").select("role, agent_name, full_name").eq("id", session.user.id).maybeSingle();
-  state.profile = data ? { ...data, email: session.user.email } : { role: "pending", agent_name: null, full_name: "", email: session.user.email };
+  const result = await supabase.from("profiles").select("role, agent_name, full_name").eq("id", session.user.id).maybeSingle();
+  if (result.error) throw new Error(`Could not load your profile: ${result.error.message}`);
+  const data = result.data;
+  state.profile = data ? { ...data, id: session.user.id, email: session.user.email }
+    : { id: session.user.id, role: "pending", agent_name: null, full_name: "", email: session.user.email };
 }
 
 async function boot() {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session) { await resolveProfile(session); await loadData(); }
+  const sessionResult = await supabase.auth.getSession();
+  if (sessionResult.error) state.fatalError = `Could not restore your session: ${sessionResult.error.message}`;
+  const session = sessionResult.data?.session;
+  if (session) {
+    try { await resolveProfile(session); await loadData(); }
+    catch (error) { state.fatalError = error.message; }
+  }
   render();
   supabase.auth.onAuthStateChange(async (_e, s) => {
-    if (s && !state.profile) { await resolveProfile(s); await loadData(); render(); }
-    if (!s && state.profile) { state.profile = null; render(); }
+    if (s && !state.profile) {
+      try { await resolveProfile(s); await loadData(); }
+      catch (error) { state.fatalError = error.message; }
+      render();
+    }
+    if (!s && state.profile) { clearSensitiveState(); render(); }
   });
 }
 
@@ -160,7 +236,9 @@ async function signInPassword() {
   const btn = document.getElementById("authgo"); btn.disabled = true; btn.textContent = "Signing in…";
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) { renderLogin({ kind: "is-error", text: error.message, email }); return; }
-  await resolveProfile(data.session); await loadData(); render();
+  try { await resolveProfile(data.session); await loadData(); }
+  catch (loadError) { state.fatalError = loadError.message; }
+  render();
 }
 
 async function signUp() {
@@ -172,7 +250,11 @@ async function signUp() {
   const btn = document.getElementById("authgo"); btn.disabled = true; btn.textContent = "Creating account…";
   const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName } } });
   if (error) { renderLogin({ kind: "is-error", text: error.message, email }); return; }
-  if (data.session) { await resolveProfile(data.session); await loadData(); render(); }
+  if (data.session) {
+    try { await resolveProfile(data.session); await loadData(); }
+    catch (loadError) { state.fatalError = loadError.message; }
+    render();
+  }
   else {
     state.authMode = "signin";
     renderLogin({ kind: "is-ok", text: "Account created. Confirm via the email we sent, then sign in.", email });
@@ -193,10 +275,11 @@ function navLink(screen, label) {
 }
 function renderApp() {
   const p = state.profile;
-  const showTx = roleIn("owner", "accounts");
+  const showTx = roleIn("owner", "accounts", "admin");
   const showLedger = roleIn("owner", "accounts", "admin") || p.role === "agent";
   const showTeam = roleIn("owner");
   const pendingTeam = state.team.filter((t) => t.role === "pending").length;
+  const pendingRequests = state.requests.filter((request) => request.status === "pending").length;
   const ledgerLabel = p.role === "agent" ? "My Ledger" : "Agent Ledgers";
   const nav = `
   <nav class="nav">
@@ -205,6 +288,7 @@ function renderApp() {
     ${showTx ? navLink("transactions", "Transactions") : ""}
     ${roleIn("owner", "accounts", "admin") ? navLink("invoices", "Invoices & Receipts") : ""}
     ${showLedger ? navLink("ledgers", ledgerLabel) : ""}
+    ${roleIn("pending") ? "" : navLink("requests", pendingRequests ? `Requests (${pendingRequests})` : "Requests")}
     ${roleIn("owner", "admin") ? navLink("staff", "Staff") : ""}
     ${showTeam ? navLink("team", pendingTeam ? `Team (${pendingTeam})` : "Team") : ""}
     <div class="nav-right">
@@ -215,18 +299,29 @@ function renderApp() {
     </div>
   </nav>`;
   let body = "";
-  if (roleIn("pending")) body = viewPending();
+  if (state.fatalError) body = viewFatalError();
+  else if (roleIn("pending")) body = viewPending();
   else if (state.screen === "transactions" && showTx) body = viewTransactions();
   else if (state.screen === "invoices" && roleIn("owner", "accounts", "admin")) body = viewInvoices();
   else if (state.screen === "ledgers" && showLedger) body = viewLedgers();
+  else if (state.screen === "requests") body = viewRequests();
   else if (state.screen === "staff" && roleIn("owner", "admin")) body = viewStaff();
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal();
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
-    state.profile = null; render();
+    clearSensitiveState(); render();
+  };
+  const refreshAccess = document.getElementById("refreshaccess");
+  if (refreshAccess) refreshAccess.onclick = async () => {
+    refreshAccess.disabled = true; refreshAccess.textContent = "Checking…";
+    const sessionResult = await supabase.auth.getSession();
+    try {
+      if (sessionResult.error || !sessionResult.data?.session) throw new Error(sessionResult.error?.message || "Session expired");
+      await resolveProfile(sessionResult.data.session); await loadData(); render();
+    } catch (error) { state.fatalError = error.message; render(); }
   };
   wireScreen();
 }
@@ -255,7 +350,19 @@ function expiryTiers() {
   ];
 }
 
-// ── view: pending approval ───────────────────────────────
+// ── view: fatal data error ────────────────────────────────
+function viewFatalError() {
+  return `
+  <div class="md-dashboard">
+    <header class="md-dashboard-header">
+      <div><span class="card-kicker">Connection problem</span><h1 style="margin-top:4px">The CRM data could not be loaded</h1>
+      <p class="text-muted" style="margin:0">${esc(state.fatalError)}</p></div>
+    </header>
+    <div class="md-empty"><button class="btn btn-primary" id="retryload">Try again</button></div>
+  </div>`;
+}
+
+// ── view: pending approval ────────────────────────────────
 function viewPending() {
   return `
   <div class="md-dashboard">
@@ -263,26 +370,34 @@ function viewPending() {
       <div><span class="card-kicker">Account created</span><h1 style="margin-top:4px">Awaiting approval</h1>
       <p class="text-muted" style="margin:0">Your account is registered. The owner will approve your access and assign your role — check back soon.</p></div>
     </header>
-    <div class="md-empty">Nothing to show yet. Once approved, your workspace appears here automatically.</div>
+    <div class="md-empty">Nothing to show yet. Once approved, check your access to load the workspace.<br><br>
+      <button class="btn btn-primary" id="refreshaccess">Check access</button>
+    </div>
   </div>`;
 }
 
 // ── view: staff directory (owner + admin) ────────────────
 function viewStaff() {
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const daysTo = (iso) => iso ? Math.round((new Date(iso + "T00:00:00") - today) / 86400000) : null;
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const todayIso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const permitStatus = (staff) => getStaffPermitStatus(staff.card_expiry, todayIso);
   const q = state.staffQuery.trim().toLowerCase();
   const branches = ["All", ...[...new Set(state.staff.map((s) => s.branch).filter(Boolean))].sort()];
   const branchTabs = branches.map((b) =>
-    `<button class="tab ${state.staffBranch === b ? "is-active" : ""}" data-staffbranch="${esc(b)}">${b}${b === "All" ? ` (${state.staff.length})` : ""}</button>`).join("");
+    `<button class="tab ${state.staffBranch === b ? "is-active" : ""}" data-staffbranch="${esc(b)}">${esc(b)}${b === "All" ? ` (${state.staff.length})` : ""}</button>`).join("");
   const rows = state.staff.filter((s) =>
     (state.staffBranch === "All" || s.branch === state.staffBranch) &&
     (!q || [s.name, s.job, s.nationality, s.card_number].join(" ").toLowerCase().includes(q)));
-  const expiringSoon = state.staff.filter((s) => { const d = daysTo(s.card_expiry); return d !== null && d <= 60; });
+  const expired = state.staff.filter((s) => permitStatus(s).status === "expired");
+  const expiringSoon = state.staff.filter((s) => permitStatus(s).status === "expiring");
+  const attention = [...expired, ...expiringSoon].sort((a, b) => a.card_expiry.localeCompare(b.card_expiry));
   const body = rows.map((s) => {
-    const d = daysTo(s.card_expiry);
-    const expClass = d === null ? "" : d < 0 ? "expiry-days is-overdue" : d <= 60 ? "expiry-days" : "";
-    const expLabel = d === null ? "—" : d < 0 ? `${showDate(s.card_expiry)} · expired` : d <= 60 ? `${showDate(s.card_expiry)} · ${d}d` : showDate(s.card_expiry);
+    const permit = permitStatus(s);
+    const expClass = permit.status === "expired" ? "expiry-days is-overdue" : permit.status === "expiring" ? "expiry-days" : "";
+    const expLabel = permit.status === "missing" ? "—" : permit.status === "expired"
+      ? `${showDate(s.card_expiry)} · ${Math.abs(permit.days)}d overdue`
+      : permit.status === "expiring" ? `${showDate(s.card_expiry)} · ${permit.days}d` : showDate(s.card_expiry);
     return `<tr>
       <td>${esc(s.name)}</td><td>${esc(s.job || "—")}</td><td>${esc(s.nationality || "—")}</td>
       <td>${esc(s.branch || "—")}</td><td>${esc(s.card_number || "—")}</td>
@@ -291,11 +406,11 @@ function viewStaff() {
   return `
   <div>
     <div style="margin-bottom:20px"><span class="card-kicker">Owner / HR</span><h1 style="margin-top:4px">Staff Directory</h1><p class="text-muted" style="margin:0">${state.staff.length} employees across Main and Branch offices.</p></div>
-    ${expiringSoon.length ? `
+    ${attention.length ? `
     <section class="md-section" style="margin-bottom:20px">
-      <div class="md-section-header"><h3>Work permits expiring soon</h3><span class="tag tag-accent">${expiringSoon.length} within 60 days</span></div>
+      <div class="md-section-header"><h3>Work permits requiring attention</h3><span class="tag tag-accent">${expired.length} expired · ${expiringSoon.length} within 60 days</span></div>
       <div class="table-wrap"><table class="grid"><thead><tr><th>Name</th><th>Job</th><th>Branch</th><th>Card no</th><th>Expiry</th></tr></thead><tbody>
-        ${expiringSoon.sort((a,b)=>a.card_expiry.localeCompare(b.card_expiry)).map((s)=>{const d=daysTo(s.card_expiry);return `<tr><td>${esc(s.name)}</td><td>${esc(s.job||"—")}</td><td>${esc(s.branch)}</td><td>${esc(s.card_number)}</td><td><span class="${d<0?"expiry-days is-overdue":"expiry-days"}">${showDate(s.card_expiry)} · ${d<0?Math.abs(d)+"d overdue":d+"d"}</span></td></tr>`;}).join("")}
+        ${attention.map((s)=>{const permit=permitStatus(s);return `<tr><td>${esc(s.name)}</td><td>${esc(s.job||"—")}</td><td>${esc(s.branch)}</td><td>${esc(s.card_number)}</td><td><span class="${permit.status === "expired" ? "expiry-days is-overdue" : "expiry-days"}">${showDate(s.card_expiry)} · ${permit.status === "expired" ? Math.abs(permit.days)+"d overdue" : permit.days+"d"}</span></td></tr>`;}).join("")}
       </tbody></table></div>
     </section>` : ""}
     <div class="tx-toolbar">
@@ -311,6 +426,112 @@ function viewStaff() {
       </table></div>
     </div>
   </div>`;
+}
+
+// ── view: agent requests (Stage 4) ───────────────────────
+function requestTypeLabel(type) {
+  return ({ deal_correction: "Deal correction", commission_query: "Commission query", document_request: "Document request", other: "Other" })[type] || type;
+}
+
+function requestStatusLabel(status) {
+  return status === "in_review" ? "In review" : status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function viewRequests() {
+  const canSubmit = roleIn("agent");
+  const canReview = roleIn("owner", "accounts");
+  const statuses = ["All", "pending", "in_review", "resolved", "rejected"];
+  const tabs = statuses.map((status) => `<button class="tab ${state.requestStatus === status ? "is-active" : ""}" data-requeststatus="${status}">${status === "All" ? "All" : requestStatusLabel(status)}</button>`).join("");
+  const rows = state.requests.filter((request) => state.requestStatus === "All" || request.status === state.requestStatus);
+  const body = rows.map((request) => {
+    const date = new Date(request.created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+    const deal = request.deal_group ? dealLabelFor(request.deal_group) : "—";
+    const action = canReview ? `<div data-requestrow="${request.id}" style="display:grid;gap:6px;min-width:220px">
+      <select class="input" data-request-state style="padding:6px 8px">
+        ${["pending","in_review","resolved","rejected"].map((status) => `<option value="${status}" ${status === request.status ? "selected" : ""}>${requestStatusLabel(status)}</option>`).join("")}
+      </select>
+      <textarea class="input" data-request-response rows="2" maxlength="4000" placeholder="Response to agent">${esc(request.response || "")}</textarea>
+      <button class="btn btn-primary btn-mini" data-saverequest>Save update</button>
+    </div>` : esc(request.response || "—");
+    return `<tr>
+      <td>${esc(date)}</td><td>${esc(request.submitter_name)}</td><td>${esc(requestTypeLabel(request.request_type))}</td>
+      <td><strong>${esc(request.subject)}</strong><br><span class="text-muted" style="white-space:pre-wrap">${esc(request.details)}</span></td>
+      <td>${esc(deal)}</td><td><span class="tag ${request.status === "pending" ? "tag-accent" : "tag-neutral"}">${esc(requestStatusLabel(request.status))}</span></td>
+      <td>${action}</td>
+    </tr>`;
+  }).join("");
+  return `<div>
+    <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div><span class="card-kicker">Operations / Requests</span><h1 style="margin-top:4px">${canSubmit ? "My Requests" : "Agent Requests"}</h1><p class="text-muted" style="margin:0">Track deal corrections, commission questions, and document requests.</p></div>
+      ${canSubmit ? `<button class="btn btn-primary" id="newrequest">+ New request</button>` : ""}
+    </div>
+    <div class="tx-toolbar"><div class="tabs">${tabs}</div><span class="text-muted" style="font-size:12px">${rows.length} requests</span></div>
+    <div class="sheet"><div class="sheet-hint">Requests are private to the submitting agent and the operations team</div>
+      <div class="table-wrap"><table class="grid" style="min-width:1050px">
+        <thead><tr><th>Date</th><th>Submitted by</th><th>Type</th><th>Request</th><th>Related deal</th><th>Status</th><th>${canReview ? "Workflow / response" : "Response"}</th></tr></thead>
+        <tbody>${body || `<tr><td colspan="7"><div class="md-empty" style="border:0">No requests match this status.</div></td></tr>`}</tbody>
+      </table></div>
+    </div>
+  </div>`;
+}
+
+function viewRequestModal() {
+  const f = state.requestForm;
+  if (!f) return "";
+  const opts = dealGroupOptions();
+  const dealList = `<datalist id="requestdeals">${opts.map((option) => `<option value="${esc(option.label)}">`).join("")}</datalist>`;
+  return `<div class="modal-backdrop">
+    <div class="modal" style="width:min(640px,100%)" role="dialog" aria-labelledby="requesttitle">
+      <div class="modal-head"><h3 id="requesttitle">New request</h3><button class="modal-close" id="requestclose" aria-label="Close">×</button></div>
+      <div class="modal-body">${dealList}
+        <div class="form-grid" style="grid-template-columns:1fr 1fr">
+          <div class="field"><label for="r_type">Type</label><select class="input" id="r_type">
+            <option value="deal_correction">Deal correction</option><option value="commission_query">Commission query</option>
+            <option value="document_request">Document request</option><option value="other">Other</option>
+          </select></div>
+          <div class="field"><label for="r_deal">Related deal (optional)</label><input class="input" id="r_deal" list="requestdeals" placeholder="Type to search your deals"></div>
+          <div class="field" style="grid-column:1/-1"><label for="r_subject">Subject</label><input class="input" id="r_subject" maxlength="160" placeholder="Short summary"></div>
+          <div class="field" style="grid-column:1/-1"><label for="r_details">Details</label><textarea class="input" id="r_details" rows="6" maxlength="4000" placeholder="Explain exactly what needs attention"></textarea></div>
+        </div>
+        <div class="modal-actions"><span class="form-msg" id="requestmsg">${esc(f.msg || "")}</span><button class="btn btn-secondary" id="requestcancel">Cancel</button><button class="btn btn-primary" id="requestsave">Submit request</button></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function saveRequest() {
+  const requestType = document.getElementById("r_type").value;
+  const dealLabel = document.getElementById("r_deal").value.trim();
+  const subject = document.getElementById("r_subject").value.trim();
+  const details = document.getElementById("r_details").value.trim();
+  const msg = document.getElementById("requestmsg");
+  const deal = dealLabel ? dealGroupOptions().find((option) => option.label === dealLabel) : null;
+  if (dealLabel && !deal) { msg.textContent = "Choose a related deal from the list, or leave it blank."; return; }
+  if (subject.length < 3 || details.length < 3) { msg.textContent = "Subject and details must each be at least 3 characters."; return; }
+  const button = document.getElementById("requestsave"); button.disabled = true; button.textContent = "Submitting…";
+  const result = await supabase.from("agent_requests").insert({
+    request_type: requestType, subject, details, deal_group: deal?.group || null,
+  });
+  if (result.error) { msg.textContent = result.error.message; button.disabled = false; button.textContent = "Submit request"; return; }
+  if (!await reloadAfterWrite(reloadRequests, "Request")) return;
+  state.requestForm = null; state.requestStatus = "All"; render();
+}
+
+async function saveRequestReview(container) {
+  const id = container.dataset.requestrow;
+  const status = container.querySelector("[data-request-state]").value;
+  const response = container.querySelector("[data-request-response]").value.trim() || null;
+  const button = container.querySelector("[data-saverequest]"); button.disabled = true; button.textContent = "Saving…";
+  const current = state.requests.find((request) => request.id === id);
+  const result = await supabase.rpc("review_agent_request", {
+    p_id: id,
+    p_status: status,
+    p_response: response,
+    p_expected_updated_at: current?.updated_at,
+  });
+  if (result.error) { window.alert("Could not update request: " + result.error.message); button.disabled = false; button.textContent = "Save update"; return; }
+  if (!await reloadAfterWrite(reloadRequests, "Request update")) return;
+  render();
 }
 
 // ── view: team management (owner) ────────────────────────
@@ -346,9 +567,13 @@ async function saveTeamRow(tr) {
   const uid = tr.dataset.uid;
   const role = tr.querySelector("[data-role]").value;
   const agent_name = tr.querySelector("[data-agentname]").value || null;
+  const msg = document.getElementById("teammsg");
+  if (role === "agent" && !agent_name) { msg.textContent = "Select an agent ledger before assigning the Agent role."; return; }
+  const ownerCount = state.team.filter((member) => member.role === "owner").length;
+  const target = state.team.find((member) => member.id === uid);
+  if (target?.role === "owner" && role !== "owner" && ownerCount <= 1) { msg.textContent = "The last owner cannot be demoted."; return; }
   const btn = tr.querySelector("[data-save]"); btn.disabled = true; btn.textContent = "Saving…";
   const { error } = await supabase.from("profiles").update({ role, agent_name }).eq("id", uid);
-  const msg = document.getElementById("teammsg");
   if (error) { msg.textContent = "Could not save: " + error.message; btn.disabled = false; btn.textContent = "Save"; return; }
   const t = state.team.find((x) => x.id === uid);
   if (t) { t.role = role; t.agent_name = agent_name; }
@@ -360,7 +585,7 @@ async function saveTeamRow(tr) {
 function viewDashboard() {
   const p = state.profile;
   if (p.role === "agent") return viewAgentDashboard();
-  const deals = state.deals;
+  const deals = state.deals.filter((deal) => !state.txMonth || deal.month === state.txMonth);
   const received = deals.reduce((s, d) => s + (+d.commission_received || 0), 0);
   const totc = deals.reduce((s, d) => s + (+d.total_commission || 0), 0);
   const tiers = expiryTiers();
@@ -368,7 +593,7 @@ function viewDashboard() {
   const kicker = p.role === "owner" ? "Owner / Overview" : p.role === "accounts" ? "Accounts workspace" : "Admin workspace";
   const kpis = `
   <section class="md-kpi-grid">
-    <div class="md-kpi is-accent"><span class="card-kicker">Deals this month</span><span class="md-kpi-value">${deals.length}</span><span class="md-kpi-detail">June 2026 register</span></div>
+    <div class="md-kpi is-accent"><span class="card-kicker">Deals this month</span><span class="md-kpi-value">${deals.length}</span><span class="md-kpi-detail">${monthLabel(state.txMonth)} register</span></div>
     <div class="md-kpi"><span class="card-kicker">Commission received</span><span class="md-kpi-value">${money(Math.round(received))}</span><span class="md-kpi-detail">Sum of received commission</span></div>
     <div class="md-kpi"><span class="card-kicker">Total commission</span><span class="md-kpi-value">${money(Math.round(totc))}</span><span class="md-kpi-detail">Incl. third-party share</span></div>
     <div class="md-kpi"><span class="card-kicker">Expiring ≤90 days</span><span class="md-kpi-value">${expiringSoon}</span><span class="md-kpi-detail">${tiers[0].items.length} already expired</span></div>
@@ -400,7 +625,7 @@ function viewDashboard() {
   return `
   <div class="md-dashboard">
     <header class="md-dashboard-header">
-      <div><span class="card-kicker">${esc(kicker)}</span><h1 style="margin-top:4px">June 2026 Overview</h1><p class="text-muted" style="margin:0">Live from the Xsite database.</p></div>
+      <div><span class="card-kicker">${esc(kicker)}</span><h1 style="margin-top:4px">${monthLabel(state.txMonth)} Overview</h1><p class="text-muted" style="margin:0">Live from the Xsite database.</p></div>
     </header>
     ${kpis}
     ${strip}
@@ -408,14 +633,14 @@ function viewDashboard() {
 }
 
 function viewAgentDashboard() {
-  const rows = state.commission;
+  const rows = state.commission.filter((row) => !state.ledgerMonth || row.month === state.ledgerMonth);
   const received = rows.reduce((s, r) => s + (+r.received || 0), 0);
   const vat = rows.reduce((s, r) => s + (+r.vat || 0), 0);
   const share = rows.reduce((s, r) => s + (+r.agent_share || 0), 0);
   return `
   <div class="md-dashboard">
     <header class="md-dashboard-header">
-      <div><span class="card-kicker">Private agent account</span><h1 style="margin-top:4px">${esc(state.profile.full_name || state.profile.agent_name || "My account")}</h1><p class="text-muted" style="margin:0">Your June 2026 commission summary.</p></div>
+      <div><span class="card-kicker">Private agent account</span><h1 style="margin-top:4px">${esc(state.profile.full_name || state.profile.agent_name || "My account")}</h1><p class="text-muted" style="margin:0">Your ${monthLabel(state.ledgerMonth)} commission summary.</p></div>
     </header>
     <section class="md-kpi-grid">
       <div class="md-kpi is-accent"><span class="card-kicker">My deals</span><span class="md-kpi-value">${rows.length}</span><span class="md-kpi-detail">Commission entries</span></div>
@@ -440,7 +665,8 @@ function viewTransactions() {
     (!state.txMonth || d.month === state.txMonth) &&
     (state.txType === "All" || (d.deal_type || "").replace("Off plan", "Off Plan") === state.txType) &&
     (!q || [d.agent, d.agent2, d.third_party, d.building, d.unit, d.area, d.landlord, d.tenant, d.payment_method].join(" ").toLowerCase().includes(q)));
-  const dealKeys = new Set(rows.map((d) => [d.unit, d.building, d.price, d.tc_start].join("|")));
+  const dealKeys = new Set(rows.map((d) => d.group_id || d.id));
+  const editableGroups = new Set(state.commission.map((entry) => entry.group_id).filter(Boolean));
   const recv = rows.reduce((s, d) => s + (+d.commission_received || 0), 0);
   const totc = rows.reduce((s, d) => s + (+d.total_commission || 0), 0);
   const tabs = ["All", "Rent", "Renewal", "Off Plan", "Secondary Sale"].map((t) =>
@@ -463,12 +689,17 @@ function viewTransactions() {
     <td>${esc(d.landlord || "—")}</td><td>${esc(d.tenant || "—")}</td>
     <td>${esc(showDate(d.tc_start, d.tc_start_raw))}</td><td>${esc(showDate(d.tc_end, d.tc_end_raw))}</td>
     <td class="numeric">${money(d.security_deposit)}</td><td>${esc(d.cheque_count || "—")}</td><td>${esc(d.payment_method || "—")}</td>
-    ${canEdit ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editdeal="${d.id}">Edit</button><button class="btn btn-secondary btn-mini" data-deletedeal="${d.id}">Delete</button></div></td>` : ""}</tr>`).join("");
+    ${canEdit ? (editableGroups.has(d.group_id)
+      ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editdeal="${d.id}">Edit</button><button class="btn btn-secondary btn-mini" data-deletedeal="${d.id}">Delete</button></div></td>`
+      : `<td><span class="text-muted" style="font-size:11px">Imported · read-only</span></td>`) : ""}</tr>`).join("");
   return `
   <div>
     <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div><span class="card-kicker">Accounts / Master Sheet</span><h1 style="margin-top:4px">Transactions Register</h1><p class="text-muted" style="margin:0">Every deal with tenancy, deposit, and payment details — ${monthLabel(state.txMonth)}.</p></div>
-      ${canAdd ? `<button class="btn btn-primary" id="newdeal">+ New deal</button>` : ""}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary" id="exporttx">Export CSV</button>
+        ${canAdd ? `<button class="btn btn-primary" id="newdeal">+ New deal</button>` : ""}
+      </div>
     </div>
     ${expBlock}
     <div class="tx-toolbar">
@@ -579,16 +810,13 @@ function collectDealForm() {
 function dealAutoMath() {
   collectDealForm();
   const f = state.dealForm;
-  const totc = parseFloat(f.total_commission), recv = parseFloat(f.commission_received);
-  const shared = !!f.agent2.trim();
-  const r2 = (n) => Math.round(n * 100) / 100;
-  if (Number.isFinite(totc)) f.vat = r2(totc / 21);
-  if (Number.isFinite(recv) && Number.isFinite(parseFloat(f.vat))) f.commission_ex_vat = r2(recv - parseFloat(f.vat));
-  const exv = parseFloat(f.commission_ex_vat);
-  if (Number.isFinite(exv)) {
-    f.agent_business = r2(shared ? exv / 2 : exv);
-    f.company_share = r2(f.agent_business / 2);
-    f.agent_share = r2(f.agent_business / 2);
+  const calculated = calculateDealCommission(f.total_commission, f.commission_received, !!f.agent2.trim());
+  if (calculated) {
+    f.vat = calculated.vat;
+    f.commission_ex_vat = calculated.commissionExVat;
+    f.agent_business = calculated.agentBusiness;
+    f.company_share = calculated.companyShare;
+    f.agent_share = calculated.agentShare;
   }
   ["vat","commission_ex_vat","agent_business","company_share","agent_share"].forEach((k) => {
     const el = document.getElementById("f_" + k); if (el) el.value = f[k];
@@ -597,12 +825,9 @@ function dealAutoMath() {
 function dealAutoEnd() {
   collectDealForm();
   const f = state.dealForm;
-  if (f.tc_start && Number.isFinite(parseInt(f.duration))) {
-    const d = new Date(f.tc_start + "T00:00:00");
-    d.setMonth(d.getMonth() + parseInt(f.duration));
-    d.setDate(d.getDate() - 1);
-    const pad = (n) => String(n).padStart(2, "0");
-    f.tc_end = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const calculatedEnd = calculateContractEnd(f.tc_start, f.duration);
+  if (calculatedEnd) {
+    f.tc_end = calculatedEnd;
     const el = document.getElementById("f_tc_end"); if (el) el.value = f.tc_end;
   }
 }
@@ -643,16 +868,19 @@ async function saveDeal() {
     agent_business: base.agent_business, xsite_share: base.company_share,
     agent_share: base.agent_share, month,
   }));
-  if (f.groupId) {
-    const delD = await supabase.from("deals").delete().eq("group_id", groupId);
-    const delC = await supabase.from("commission_entries").delete().eq("group_id", groupId);
-    if (delD.error || delC.error) { msgEl.textContent = (delD.error || delC.error).message; btn.disabled = false; btn.textContent = "Save changes"; return; }
+  const { error } = await supabase.rpc("save_deal_group", {
+    p_group_id: groupId,
+    p_deals: dealRows,
+    p_commission: commissionRows,
+    p_replace: !!f.groupId,
+  });
+  if (error) {
+    msgEl.textContent = error.message;
+    btn.disabled = false;
+    btn.textContent = f.groupId ? "Save changes" : "Save deal";
+    return;
   }
-  const insD = await supabase.from("deals").insert(dealRows);
-  if (insD.error) { msgEl.textContent = insD.error.message; btn.disabled = false; btn.textContent = "Save deal"; return; }
-  const insC = await supabase.from("commission_entries").insert(commissionRows);
-  if (insC.error) { msgEl.textContent = "Deal saved but ledger entry failed: " + insC.error.message; }
-  await reloadDeals();
+  if (!await reloadAfterWrite(reloadDeals, "Deal")) return;
   state.txMonth = month;
   state.dealForm = null;
   render();
@@ -663,10 +891,9 @@ async function deleteDeal(id) {
   const group = state.deals.filter((x) => x.group_id === d.group_id);
   const label = `${d.unit || ""} ${d.building || ""} (${d.agent}${group.length > 1 ? " + mirror row" : ""})`;
   if (!window.confirm(`Delete this deal and its linked entries?\n${label}`)) return;
-  await supabase.from("commission_entries").delete().eq("group_id", d.group_id);
-  const { error } = await supabase.from("deals").delete().eq("group_id", d.group_id);
+  const { error } = await supabase.rpc("delete_deal_group", { p_group_id: d.group_id });
   if (error) { window.alert("Could not delete: " + error.message); return; }
-  await reloadDeals();
+  if (!await reloadAfterWrite(reloadDeals, "Deal deletion")) return;
   render();
 }
 
@@ -715,7 +942,10 @@ function viewInvoices() {
   <div>
     <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div><span class="card-kicker">Accounts / Money</span><h1 style="margin-top:4px">Invoices &amp; Receipts</h1><p class="text-muted" style="margin:0">Every document links to a register deal — ${monthLabel(state.invMonth)}.</p></div>
-      <button class="btn btn-primary" id="newdoc">+ New receipt / invoice</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary" id="exportdocs">Export CSV</button>
+        <button class="btn btn-primary" id="newdoc">+ New receipt / invoice</button>
+      </div>
     </div>
     <section class="md-kpi-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:20px">
       <div class="md-kpi is-accent"><span class="card-kicker">Receipts — ${monthLabel(state.invMonth)}</span><span class="md-kpi-value">${money(Math.round(received))}</span><span class="md-kpi-detail">${monthDocs.filter((d)=>d.doc_type==="receipt").length} receipts recorded</span></div>
@@ -739,12 +969,6 @@ function viewInvoices() {
 }
 
 // ── doc modal ────────────────────────────────────────────
-function nextDocNo(type) {
-  const prefix = type === "invoice" ? "INV-" : "RCT-";
-  const max = state.docs.filter((d) => d.doc_type === type)
-    .reduce((m, d) => Math.max(m, parseInt(String(d.doc_no).replace(/\D/g, "")) || 0), 1000);
-  return prefix + (max + 1);
-}
 function emptyDocForm() {
   return { id: null, doc_type: "receipt", dealLabel: "", client: "", description: "",
     amount: "", doc_date: new Date().toISOString().slice(0, 10), payment_method: "", msg: "" };
@@ -766,7 +990,7 @@ function viewDocModal() {
       <div class="modal-body">${dl}
         <div class="form-grid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
           <div class="field"><label for="d_type">Type</label>
-            <select class="input" id="d_type">
+            <select class="input" id="d_type" ${f.id ? "disabled" : ""}>
               <option value="receipt" ${f.doc_type === "receipt" ? "selected" : ""}>Receipt — money received</option>
               <option value="invoice" ${f.doc_type === "invoice" ? "selected" : ""}>Invoice — payment requested</option>
             </select></div>
@@ -816,25 +1040,42 @@ async function saveDoc() {
     status: type === "receipt" ? "received" : (f.status === "paid" ? "paid" : "pending"),
   };
   let error;
-  if (f.id) ({ error } = await supabase.from("money_docs").update(rec).eq("id", f.id));
-  else ({ error } = await supabase.from("money_docs").insert({ ...rec, doc_no: nextDocNo(type) }));
+  if (f.id) {
+    ({ error } = await supabase.from("money_docs").update(rec).eq("id", f.id));
+  } else {
+    ({ error } = await supabase.rpc("create_money_doc", {
+      p_doc_type: rec.doc_type,
+      p_deal_group: rec.deal_group,
+      p_doc_date: rec.doc_date,
+      p_client: rec.client,
+      p_description: rec.description,
+      p_amount: rec.amount,
+      p_payment_method: rec.payment_method,
+      p_status: rec.status,
+    }));
+  }
   if (error) { msgEl.textContent = error.message; btn.disabled = false; btn.textContent = "Save"; return; }
-  await reloadDocs();
+  if (!await reloadAfterWrite(reloadDocs, "Document")) return;
   state.invMonth = rec.month;
   state.docForm = null;
   render();
 }
 async function markPaid(id) {
-  const { error } = await supabase.from("money_docs").update({ status: "paid" }).eq("id", id);
+  const { error } = await supabase.rpc("mark_invoice_paid", {
+    p_doc_id: id,
+    p_paid_date: new Date().toISOString().slice(0, 10),
+  });
   if (error) { window.alert("Could not update: " + error.message); return; }
-  await reloadDocs(); render();
+  if (!await reloadAfterWrite(reloadDocs, "Invoice payment")) return;
+  render();
 }
 async function deleteDoc(id) {
   const d = state.docs.find((x) => x.id === id);
   if (!d || !window.confirm(`Delete ${d.doc_no} (${money(d.amount)})?`)) return;
   const { error } = await supabase.from("money_docs").delete().eq("id", id);
   if (error) { window.alert("Could not delete: " + error.message); return; }
-  await reloadDocs(); render();
+  if (!await reloadAfterWrite(reloadDocs, "Document deletion")) return;
+  render();
 }
 
 // ── cash snapshot modal ──────────────────────────────────
@@ -897,15 +1138,10 @@ async function saveCashSnapshot() {
   const lines = f.lines.filter((l) => l.label.trim());
   if (!f.as_at || !lines.length) { msgEl.textContent = "Date and at least one line are required."; return; }
   const btn = document.getElementById("cashsave"); btn.disabled = true; btn.textContent = "Saving…";
-  const existing = state.cash.filter((c) => c.as_at === f.as_at);
-  if (existing.length) {
-    const del = await supabase.from("cash_position").delete().eq("as_at", f.as_at);
-    if (del.error) { msgEl.textContent = del.error.message; btn.disabled = false; btn.textContent = "Save snapshot"; return; }
-  }
-  const rows = lines.map((l, i) => ({ as_at: f.as_at, label: l.label.trim(), amount: l.amount, sort_order: i, month: f.as_at.slice(0, 7) }));
-  const { error } = await supabase.from("cash_position").insert(rows);
+  const rows = lines.map((l, i) => ({ label: l.label.trim(), amount: l.amount, sort_order: i }));
+  const { error } = await supabase.rpc("save_cash_snapshot", { p_as_at: f.as_at, p_lines: rows });
   if (error) { msgEl.textContent = error.message; btn.disabled = false; btn.textContent = "Save snapshot"; return; }
-  await reloadCash();
+  if (!await reloadAfterWrite(reloadCash, "Cash snapshot")) return;
   state.cashForm = null;
   render();
 }
@@ -973,7 +1209,10 @@ function viewLedgers() {
     </table></div></div>` : `<div class="md-empty">No commission records to show.</div>`;
   return `
   <div>
-    <div style="margin-bottom:20px"><span class="card-kicker">Accounts / Commissions</span><h1 style="margin-top:4px">${state.profile.role === "agent" ? "My Commission Ledger" : "Agent Commission Ledgers"}</h1><p class="text-muted" style="margin:0">${monthLabel(state.ledgerMonth)} statements with VAT and 50/50 share.</p></div>\n    <div class="tabs" style="margin-bottom:16px">${lmonthTabs}</div>
+    <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div><span class="card-kicker">Accounts / Commissions</span><h1 style="margin-top:4px">${state.profile.role === "agent" ? "My Commission Ledger" : "Agent Commission Ledgers"}</h1><p class="text-muted" style="margin:0">${monthLabel(state.ledgerMonth)} statements with VAT and 50/50 share.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary" id="exportledger">Export CSV</button><button class="btn btn-secondary" id="printledger">Print statement</button></div>
+    </div>\n    <div class="tabs" style="margin-bottom:16px">${lmonthTabs}</div>
     <div class="ledger-layout">
       <aside class="ledger-panel">
         ${state.profile.role !== "agent" ? `<input class="input" id="lq" type="search" placeholder="Search agents…" value="${esc(state.ledgerQuery)}" style="margin-bottom:12px">` : ""}
@@ -984,8 +1223,57 @@ function viewLedgers() {
   </div>`;
 }
 
+function exportTransactions() {
+  const q = state.txQuery.trim().toLowerCase();
+  const rows = state.deals.filter((d) =>
+    (!state.txMonth || d.month === state.txMonth) &&
+    (state.txType === "All" || (d.deal_type || "").replace("Off plan", "Off Plan") === state.txType) &&
+    (!q || [d.agent, d.agent2, d.third_party, d.building, d.unit, d.area, d.landlord, d.tenant, d.payment_method].join(" ").toLowerCase().includes(q)));
+  downloadCsv(`xsite-transactions-${state.txMonth || "all"}.csv`, rows, [
+    ["S.No", "sno"], ["Date", "deal_date"], ["Agent", "agent"], ["Agent 2", "agent2"],
+    ["Third party", "third_party"], ["Type", "deal_type"], ["Unit", "unit"], ["Building", "building"],
+    ["Area", "area"], ["Rent / Sale price", "price"], ["Total commission", "total_commission"],
+    ["Commission received", "commission_received"], ["Landlord", "landlord"], ["Tenant", "tenant"],
+    ["TC start", "tc_start"], ["TC end", "tc_end"], ["Security deposit", "security_deposit"],
+    ["Cheques", "cheque_count"], ["Payment", "payment_method"],
+  ]);
+}
+
+function exportDocuments() {
+  const q = state.invQuery.trim().toLowerCase();
+  const rows = state.docs.filter((d) =>
+    (!state.invMonth || d.month === state.invMonth) &&
+    (state.invType === "All" || (state.invType === "Invoices" ? d.doc_type === "invoice" : d.doc_type === "receipt")) &&
+    (!q || [d.doc_no, d.client, d.description, d.payment_method, dealLabelFor(d.deal_group)].join(" ").toLowerCase().includes(q)))
+    .map((d) => ({ ...d, deal: dealLabelFor(d.deal_group) }));
+  downloadCsv(`xsite-documents-${state.invMonth || "all"}.csv`, rows, [
+    ["Document no", "doc_no"], ["Date", "doc_date"], ["Type", "doc_type"], ["Deal", "deal"],
+    ["Client", "client"], ["Description", "description"], ["Amount", "amount"], ["Status", "status"],
+    ["Payment", "payment_method"],
+  ]);
+}
+
+function exportLedger() {
+  const rows = state.commission.filter((r) => r.agent_name === state.selectedAgent && (!state.ledgerMonth || r.month === state.ledgerMonth));
+  const safeAgent = (state.selectedAgent || "agent").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  downloadCsv(`xsite-ledger-${safeAgent}-${state.ledgerMonth || "all"}.csv`, rows, [
+    ["Date", "entry_date"], ["Agent", "agent_name"], ["Third party", "third_party"], ["Agent 2", "agent2"],
+    ["Type", "deal_type"], ["Unit", "unit"], ["Building", "building"], ["Area", "area"],
+    ["Annual value", "annual_value"], ["Total commission", "total_commission"], ["Received", "received"],
+    ["VAT", "vat"], ["Commission ex-VAT", "commission_ex_vat"], ["Agent business", "agent_business"],
+    ["Xsite share", "xsite_share"], ["Agent share", "agent_share"],
+  ]);
+}
+
 // ── wiring ───────────────────────────────────────────────
 function wireScreen() {
+  const retry = document.getElementById("retryload");
+  if (retry) retry.onclick = async () => {
+    retry.disabled = true; retry.textContent = "Loading…";
+    try { await loadData(); }
+    catch (error) { state.fatalError = error.message; }
+    render();
+  };
   const txq = document.getElementById("txq");
   if (txq) txq.oninput = () => { state.txQuery = txq.value; rerenderTx(); };
   root.querySelectorAll("[data-txtype]").forEach((b) => b.onclick = () => { state.txType = b.dataset.txtype; rerenderTx(); });
@@ -997,6 +1285,7 @@ function wireScreen() {
   root.querySelectorAll("[data-save]").forEach((b) => b.onclick = () => saveTeamRow(b.closest("tr")));
   const nd = document.getElementById("newdeal");
   if (nd) nd.onclick = () => { state.dealForm = emptyDealForm(); render(); };
+  const exportTx = document.getElementById("exporttx"); if (exportTx) exportTx.onclick = exportTransactions;
   root.querySelectorAll("[data-editdeal]").forEach((b) => b.onclick = () => {
     const d = state.deals.find((x) => x.id === b.dataset.editdeal);
     if (d) { state.dealForm = dealFormFromRow(d); render(); }
@@ -1015,12 +1304,19 @@ function wireScreen() {
   };
   const ndoc = document.getElementById("newdoc");
   if (ndoc) ndoc.onclick = () => { state.docForm = emptyDocForm(); render(); };
+  const exportDocs = document.getElementById("exportdocs"); if (exportDocs) exportDocs.onclick = exportDocuments;
   root.querySelectorAll("[data-editdoc]").forEach((b) => b.onclick = () => {
     const d = state.docs.find((x) => x.id === b.dataset.editdoc);
     if (d) { state.docForm = docFormFromRow(d); render(); }
   });
   root.querySelectorAll("[data-deletedoc]").forEach((b) => b.onclick = () => deleteDoc(b.dataset.deletedoc));
   root.querySelectorAll("[data-markpaid]").forEach((b) => b.onclick = () => markPaid(b.dataset.markpaid));
+  const exportLedgerButton = document.getElementById("exportledger"); if (exportLedgerButton) exportLedgerButton.onclick = exportLedger;
+  const printLedger = document.getElementById("printledger"); if (printLedger) printLedger.onclick = () => window.print();
+  // agent requests
+  root.querySelectorAll("[data-requeststatus]").forEach((button) => button.onclick = () => { state.requestStatus = button.dataset.requeststatus; render(); });
+  const newRequest = document.getElementById("newrequest"); if (newRequest) newRequest.onclick = () => { state.requestForm = { msg: "" }; render(); };
+  root.querySelectorAll("[data-saverequest]").forEach((button) => button.onclick = () => saveRequestReview(button.closest("[data-requestrow]")));
   // staff
   root.querySelectorAll("[data-staffbranch]").forEach((b) => b.onclick = () => { state.staffBranch = b.dataset.staffbranch; render(); });
   const sq = document.getElementById("staffq");
@@ -1065,6 +1361,10 @@ function wireModals() {
   document.querySelectorAll("[data-cl-remove]").forEach((b) => b.onclick = () => {
     collectCashForm(); state.cashForm.lines.splice(+b.dataset.clRemove, 1); render();
   });
+  // request modal
+  const requestClose = document.getElementById("requestclose"); if (requestClose) requestClose.onclick = () => { state.requestForm = null; render(); };
+  const requestCancel = document.getElementById("requestcancel"); if (requestCancel) requestCancel.onclick = () => { state.requestForm = null; render(); };
+  const requestSave = document.getElementById("requestsave"); if (requestSave) requestSave.onclick = saveRequest;
 }
 function rerenderTx() {
   const main = root.querySelector("main"); const focus = document.activeElement === document.getElementById("txq");
@@ -1077,6 +1377,8 @@ function rerenderLedgers() {
   if (focus) { const el = document.getElementById("lq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
 }
 
-function render() { state.profile ? renderApp() : renderLogin(); }
+function render() {
+  state.profile ? renderApp() : renderLogin(state.fatalError ? { kind: "is-error", text: state.fatalError } : undefined);
+}
 
 boot();

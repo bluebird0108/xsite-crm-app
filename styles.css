@@ -250,3 +250,13 @@ table.grid.wide { min-width: 1700px; }
   .login-brand { min-height: auto; padding: 40px 28px 24px; border-right: 0; border-bottom: 1px solid #262626; }
   .md-kpi-grid { grid-template-columns: 1fr; }
 }
+
+@media print {
+  body { background: #fff; }
+  .nav, .ledger-panel, .tabs, .btn { display: none !important; }
+  main { padding: 0; max-width: none; }
+  .ledger-layout { display: block; }
+  .sheet, .ledger-metrics { break-inside: avoid; box-shadow: none; }
+  .table-wrap { overflow: visible; }
+  .grid { font-size: 9px; }
+}
