@@ -15,6 +15,11 @@ const MONTH_LABELS = {
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const roundMoney = (value) => Math.round(value * 100) / 100;
+const localTodayIso = () => {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  return now.toISOString().slice(0, 10);
+};
 
 export function monthLabel(month) {
   if (!month) return "—";
@@ -58,7 +63,7 @@ export function calculateContractEnd(startIso, durationMonths) {
   return endExclusive.toISOString().slice(0, 10);
 }
 
-export function getStaffPermitStatus(expiryIso, todayIso = new Date().toISOString().slice(0, 10)) {
+export function getStaffPermitStatus(expiryIso, todayIso = localTodayIso()) {
   if (!ISO_DATE.test(expiryIso || "") || !ISO_DATE.test(todayIso || "")) {
     return { status: "missing", days: null };
   }
@@ -68,6 +73,18 @@ export function getStaffPermitStatus(expiryIso, todayIso = new Date().toISOStrin
   if (days < 0) return { status: "expired", days };
   if (days <= 60) return { status: "expiring", days };
   return { status: "valid", days };
+}
+
+export function renewalStatus(endIso, todayIso = localTodayIso()) {
+  if (!ISO_DATE.test(endIso || "") || !ISO_DATE.test(todayIso || "")) {
+    return { status: "missing", days: null };
+  }
+  const end = Date.parse(`${endIso}T00:00:00Z`);
+  const today = Date.parse(`${todayIso}T00:00:00Z`);
+  const days = Math.round((end - today) / 86_400_000);
+  if (days < 0) return { status: "expired", days };
+  if (days <= 90) return { status: "due", days };
+  return { status: "upcoming", days };
 }
 
 function safeCsvCell(value) {

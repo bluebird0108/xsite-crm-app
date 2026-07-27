@@ -7,6 +7,7 @@ import {
   calculateDealCommission,
   getStaffPermitStatus,
   monthLabel,
+  renewalStatus,
   toCsv,
 } from "./core.js";
 
@@ -18,7 +19,7 @@ const state = {
   fatalError: null,
   screen: "dashboard",
   authMode: "signin",
-  agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [], requests: [],
+  agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [], requests: [], contracts: [], accountTasks: [],
   selectedAgent: null,
   txQuery: "", txType: "All", ledgerQuery: "",
   txMonth: null, ledgerMonth: null,
@@ -26,6 +27,7 @@ const state = {
   cashDate: null,
   staffQuery: "", staffBranch: "All", requestStatus: "All",
   dealForm: null, pwForm: false, docForm: null, cashForm: null, requestForm: null,
+  contractForm: null, printContract: null,
 };
 
 // ── helpers ──────────────────────────────────────────────
@@ -34,6 +36,11 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
 const money = (n) => n === null || n === undefined ? "—" : "AED " + Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const isoRe = /^\d{4}-\d{2}-\d{2}$/;
+function todayIso() {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  return now.toISOString().slice(0, 10);
+}
 function showDate(iso, raw) {
   if (iso && isoRe.test(iso)) { const p = iso.split("-"); return `${p[2]}-${MONTHS[+p[1]-1]}-${p[0].slice(2)}`; }
   return raw || "—";
@@ -47,8 +54,9 @@ function clearSensitiveState() {
   state.profile = null;
   state.agents = []; state.deals = []; state.commission = []; state.cash = [];
   state.team = []; state.docs = []; state.staff = []; state.requests = [];
+  state.contracts = []; state.accountTasks = [];
   state.dealForm = null; state.pwForm = false; state.docForm = null;
-  state.cashForm = null; state.requestForm = null;
+  state.cashForm = null; state.requestForm = null; state.contractForm = null; state.printContract = null;
 }
 const COLUMNS = {
   agents: "id,name,role,month,agent_business_including_vat",
@@ -59,6 +67,8 @@ const COLUMNS = {
   money_docs: "id,doc_type,doc_no,deal_group,doc_date,client,description,amount,payment_method,status,month",
   staff: "id,name,job,nationality,branch,card_number,card_expiry",
   agent_requests: "id,created_by,submitter_name,request_type,subject,deal_group,details,status,response,created_at,updated_at",
+  contracts: "id,contract_no,deal_group,status,contract_date,start_date,end_date,landlord_name,tenant_name,owner_phone,tenant_phone,annual_rent,security_deposit,payment_mode,additional_terms,details,addendum,created_by,finalized_by,finalized_at,created_at,updated_at",
+  account_tasks: "id,contract_id,task_type,status,money_doc_id,completed_by,completed_at,created_at",
 };
 async function fetchAll(table, orderColumn, ascending = true) {
   const rows = [];
@@ -86,9 +96,10 @@ async function loadData() {
   if (roleIn("pending")) {
     state.agents = []; state.deals = []; state.commission = []; state.cash = [];
     state.team = []; state.docs = []; state.staff = []; state.requests = [];
+    state.contracts = []; state.accountTasks = [];
     return;
   }
-  const [ag, dl, cm, ch, tm, md, sf, rq] = await Promise.all([
+  const [ag, dl, cm, ch, tm, md, sf, rq, ct, at] = await Promise.all([
     fetchAll("agents", "name"),
     fetchAll("deals", "sno"),
     fetchAll("commission_entries", "agent_name"),
@@ -97,6 +108,8 @@ async function loadData() {
     roleIn("owner", "accounts", "admin") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
     roleIn("owner", "admin") ? fetchAll("staff", "name") : Promise.resolve({ data: [] }),
     fetchAll("agent_requests", "created_at", false),
+    fetchAll("contracts", "created_at", false),
+    roleIn("owner", "accounts", "admin") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
   ]);
   state.agents = requireData(ag, "Could not load agents");
   state.deals = requireData(dl, "Could not load deals");
@@ -106,6 +119,8 @@ async function loadData() {
   state.docs = requireData(md, "Could not load invoices and receipts");
   state.staff = requireData(sf, "Could not load staff directory");
   state.requests = requireData(rq, "Could not load agent requests");
+  state.contracts = requireData(ct, "Could not load contracts");
+  state.accountTasks = requireData(at, "Could not load Accounts tasks");
   const months = availableMonths(state.deals, "month");
   if (!state.txMonth || !months.includes(state.txMonth)) state.txMonth = months[0] || null;
   const lmonths = availableMonths(state.commission, "month");
@@ -140,6 +155,17 @@ async function reloadCash() {
 async function reloadRequests() {
   const result = await fetchAll("agent_requests", "created_at", false);
   state.requests = requireData(result, "Could not reload agent requests");
+}
+
+async function reloadContracts() {
+  const [contracts, tasks, docs] = await Promise.all([
+    fetchAll("contracts", "created_at", false),
+    roleIn("owner", "accounts", "admin") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
+  ]);
+  state.contracts = requireData(contracts, "Could not reload contracts");
+  state.accountTasks = requireData(tasks, "Could not reload Accounts tasks");
+  state.docs = requireData(docs, "Could not reload invoices and receipts");
 }
 
 async function reloadAfterWrite(reload, label) {
@@ -280,12 +306,16 @@ function renderApp() {
   const showTeam = roleIn("owner");
   const pendingTeam = state.team.filter((t) => t.role === "pending").length;
   const pendingRequests = state.requests.filter((request) => request.status === "pending").length;
+  const pendingAccountTasks = state.accountTasks.filter((task) => task.status === "pending").length;
+  const renewalAlerts = state.contracts.filter((contract) => contract.status === "final" && ["due", "expired"].includes(renewalStatus(contract.end_date).status)).length;
+  const contractAlerts = pendingAccountTasks + renewalAlerts;
   const ledgerLabel = p.role === "agent" ? "My Ledger" : "Agent Ledgers";
   const nav = `
   <nav class="nav">
     <div class="nav-brand"><img src="./xsite-logo.png" alt="Xsite"></div>
     ${roleIn("pending") ? "" : navLink("dashboard", "Dashboard")}
     ${showTx ? navLink("transactions", "Transactions") : ""}
+    ${roleIn("pending") ? "" : navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts")}
     ${roleIn("owner", "accounts", "admin") ? navLink("invoices", "Invoices & Receipts") : ""}
     ${showLedger ? navLink("ledgers", ledgerLabel) : ""}
     ${roleIn("pending") ? "" : navLink("requests", pendingRequests ? `Requests (${pendingRequests})` : "Requests")}
@@ -302,13 +332,14 @@ function renderApp() {
   if (state.fatalError) body = viewFatalError();
   else if (roleIn("pending")) body = viewPending();
   else if (state.screen === "transactions" && showTx) body = viewTransactions();
+  else if (state.screen === "contracts") body = viewContracts();
   else if (state.screen === "invoices" && roleIn("owner", "accounts", "admin")) body = viewInvoices();
   else if (state.screen === "ledgers" && showLedger) body = viewLedgers();
   else if (state.screen === "requests") body = viewRequests();
   else if (state.screen === "staff" && roleIn("owner", "admin")) body = viewStaff();
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal();
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
@@ -430,7 +461,8 @@ function viewStaff() {
 
 // ── view: agent requests (Stage 4) ───────────────────────
 function requestTypeLabel(type) {
-  return ({ deal_correction: "Deal correction", commission_query: "Commission query", document_request: "Document request", other: "Other" })[type] || type;
+  return ({ deal_correction: "Deal correction", commission_query: "Commission query", document_request: "Document request",
+    salary_advance: "Salary / cash advance", leave_request: "Leave request", commission_payout: "Commission payout", other: "Other" })[type] || type;
 }
 
 function requestStatusLabel(status) {
@@ -462,7 +494,7 @@ function viewRequests() {
   }).join("");
   return `<div>
     <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
-      <div><span class="card-kicker">Operations / Requests</span><h1 style="margin-top:4px">${canSubmit ? "My Requests" : "Agent Requests"}</h1><p class="text-muted" style="margin:0">Track deal corrections, commission questions, and document requests.</p></div>
+      <div><span class="card-kicker">Operations / Requests</span><h1 style="margin-top:4px">${canSubmit ? "My Requests" : "Agent Requests"}</h1><p class="text-muted" style="margin:0">Deal corrections, salary advances, leave, commission payouts, and document requests.</p></div>
       ${canSubmit ? `<button class="btn btn-primary" id="newrequest">+ New request</button>` : ""}
     </div>
     <div class="tx-toolbar"><div class="tabs">${tabs}</div><span class="text-muted" style="font-size:12px">${rows.length} requests</span></div>
@@ -487,7 +519,8 @@ function viewRequestModal() {
         <div class="form-grid" style="grid-template-columns:1fr 1fr">
           <div class="field"><label for="r_type">Type</label><select class="input" id="r_type">
             <option value="deal_correction">Deal correction</option><option value="commission_query">Commission query</option>
-            <option value="document_request">Document request</option><option value="other">Other</option>
+            <option value="document_request">Document request</option><option value="salary_advance">Salary / cash advance</option>
+            <option value="leave_request">Leave request</option><option value="commission_payout">Commission payout</option><option value="other">Other</option>
           </select></div>
           <div class="field"><label for="r_deal">Related deal (optional)</label><input class="input" id="r_deal" list="requestdeals" placeholder="Type to search your deals"></div>
           <div class="field" style="grid-column:1/-1"><label for="r_subject">Subject</label><input class="input" id="r_subject" maxlength="160" placeholder="Short summary"></div>
@@ -532,6 +565,152 @@ async function saveRequestReview(container) {
   if (result.error) { window.alert("Could not update request: " + result.error.message); button.disabled = false; button.textContent = "Save update"; return; }
   if (!await reloadAfterWrite(reloadRequests, "Request update")) return;
   render();
+}
+
+// ── view: tenancy contracts, addenda, renewals, Accounts tasks ──
+function contractDraftFromDeal(deal) {
+  return {
+    id: null, deal_group: deal?.group_id || "", status: "draft",
+    contract_date: todayIso(), start_date: deal?.tc_start || "", end_date: deal?.tc_end || "",
+    landlord_name: deal?.landlord || "", tenant_name: deal?.tenant || "", owner_phone: "", tenant_phone: "",
+    annual_rent: deal?.price || "", security_deposit: deal?.security_deposit || 0,
+    payment_mode: deal?.cheque_count ? `${deal.cheque_count} cheque(s)` : (deal?.payment_method || ""), additional_terms: "",
+    details: { lessorName: deal?.landlord || "", lessorEmiratesId: "", lessorEmail: "", lessorLicenseNo: "", lessorLicensingAuthority: "",
+      tenantEmiratesId: "", tenantEmail: "", tenantLicenseNo: "", tenantLicensingAuthority: "", plotNo: "", makaniNo: "",
+      buildingName: deal?.building || "", propertyNo: deal?.unit || "", propertyType: "Residential", unitType: "", propertyArea: "", location: deal?.area || "", premisesNo: "" },
+    addendum: { furnishing: "UNFURNISHED", premises: "", unitNo: deal?.unit || "", building: deal?.building || "", area: deal?.area || "", city: "DUBAI", customTerms: "" },
+    msg: "",
+  };
+}
+
+function openContractForm(contract = null) {
+  if (contract) state.contractForm = { ...contract, details: { ...(contract.details || {}) }, addendum: { ...(contract.addendum || {}) }, msg: "" };
+  else state.contractForm = contractDraftFromDeal(dealGroupOptions()[0]?.deal);
+  render();
+}
+
+function viewContracts() {
+  const canManage = roleIn("owner", "admin");
+  const canFulfill = roleIn("owner", "accounts");
+  const reminders = state.contracts.filter((c) => c.status === "final")
+    .map((contract) => ({ contract, renewal: renewalStatus(contract.end_date) }))
+    .filter((item) => ["due", "expired"].includes(item.renewal.status))
+    .sort((a, b) => a.renewal.days - b.renewal.days);
+  const contractRows = state.contracts.map((contract) => {
+    const renewal = contract.status === "final" ? renewalStatus(contract.end_date) : { status: "draft", days: null };
+    const renewalText = renewal.status === "expired" ? `${Math.abs(renewal.days)} days overdue` : renewal.status === "due" ? `${renewal.days} days remaining` : "Not due";
+    return `<tr><td><strong>${esc(contract.contract_no)}</strong></td><td>${esc(dealLabelFor(contract.deal_group))}</td>
+      <td>${esc(contract.landlord_name)} → ${esc(contract.tenant_name)}</td><td>${showDate(contract.start_date)} – ${showDate(contract.end_date)}</td>
+      <td><span class="tag ${contract.status === "draft" ? "tag-accent" : "tag-neutral"}">${esc(contract.status)}</span></td>
+      <td><span class="${renewal.status === "expired" ? "expiry-days is-overdue" : renewal.status === "due" ? "expiry-days" : "text-muted"}">${esc(renewalText)}</span></td>
+      <td style="white-space:nowrap">${canManage && contract.status === "draft" ? `<button class="btn btn-secondary btn-mini" data-editcontract="${contract.id}">Edit</button> ` : ""}<button class="btn btn-primary btn-mini" data-printcontract="${contract.id}">View / print</button></td></tr>`;
+  }).join("");
+  const taskRows = state.accountTasks.map((task) => {
+    const contract = state.contracts.find((c) => c.id === task.contract_id);
+    if (!contract) return "";
+    const doc = state.docs.find((d) => d.id === task.money_doc_id);
+    const action = task.status === "pending" && canFulfill ? `<div data-accounttask="${task.id}" style="display:flex;gap:6px;flex-wrap:wrap;align-items:end">
+      <label class="field compact-field">Type<select class="input" data-tasktype><option value="invoice">Invoice</option><option value="receipt">Receipt</option></select></label>
+      <label class="field compact-field">Date<input class="input" type="date" data-taskdate value="${todayIso()}"></label>
+      <label class="field compact-field">Amount<input class="input" type="number" min="0" step="0.01" data-taskamount value="${esc(contract.annual_rent)}"></label>
+      <label class="field compact-field">Payment<input class="input" data-taskpayment placeholder="Cheque / transfer"></label>
+      <button class="btn btn-primary btn-mini" data-fulfilltask>Create</button></div>` : `<span class="tag tag-neutral">${doc ? esc(doc.doc_no) : "Completed"}</span>`;
+    return `<tr><td>${esc(contract.contract_no)}</td><td>${esc(contract.tenant_name)}</td><td>${money(contract.annual_rent)}</td><td><span class="tag ${task.status === "pending" ? "tag-accent" : "tag-neutral"}">${esc(task.status)}</span></td><td>${action}</td></tr>`;
+  }).join("");
+  return `<div>
+    <div style="margin-bottom:20px;display:flex;justify-content:space-between;gap:16px;align-items:end;flex-wrap:wrap">
+      <div><span class="card-kicker">Tenancy operations</span><h1 style="margin-top:4px">${roleIn("agent") ? "My Tenancy Contracts" : "Contracts & Addenda"}</h1><p class="text-muted" style="margin:0">DLD contract drafts, Xsite addenda, 90-day renewals, and Accounts hand-off.</p></div>
+      ${canManage ? `<button class="btn btn-primary" id="newcontract">+ New contract draft</button>` : ""}
+    </div>
+    ${reminders.length ? `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Renewal reminders</h3><span class="tag tag-accent">${reminders.length} due within 90 days</span></div>
+      <div class="expiry-list">${reminders.map(({contract,renewal}) => `<div class="expiry-row"><div><strong>${esc(contract.contract_no)} · ${esc(contract.tenant_name)}</strong><div class="text-muted">${esc(dealLabelFor(contract.deal_group))} · ends ${showDate(contract.end_date)}</div></div><span class="${renewal.status === "expired" ? "expiry-days is-overdue" : "expiry-days"}">${renewal.status === "expired" ? `${Math.abs(renewal.days)}d overdue` : `${renewal.days}d left`}</span></div>`).join("")}</div></section>` : ""}
+    ${roleIn("owner", "accounts", "admin") && state.accountTasks.length ? `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Accounts notifications</h3><span class="tag tag-accent">${state.accountTasks.filter((t)=>t.status==="pending").length} pending</span></div>
+      <div class="table-wrap"><table class="grid"><thead><tr><th>Contract</th><th>Tenant</th><th>Contract value</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div></section>` : ""}
+    <div class="sheet"><div class="sheet-hint">${roleIn("agent") ? "Only finalized contracts linked to your deals are visible" : `${state.contracts.length} saved contract records`}</div>
+      <div class="table-wrap"><table class="grid" style="min-width:1000px"><thead><tr><th>Contract</th><th>Deal</th><th>Parties</th><th>Term</th><th>Status</th><th>Renewal</th><th></th></tr></thead><tbody>${contractRows || `<tr><td colspan="7"><div class="md-empty" style="border:0">No contracts yet.</div></td></tr>`}</tbody></table></div></div>
+  </div>`;
+}
+
+function contractInput(id, label, value, type = "text", extra = "") {
+  return `<div class="field"><label for="${id}">${label}</label><input class="input" id="${id}" type="${type}" value="${esc(value ?? "")}" ${extra}></div>`;
+}
+
+function viewContractModal() {
+  const f = state.contractForm;
+  if (!f) return "";
+  const options = dealGroupOptions().map((o) => `<option value="${o.group}" ${o.group === f.deal_group ? "selected" : ""}>${esc(o.label)}</option>`).join("");
+  const d = f.details || {}, a = f.addendum || {};
+  return `<div class="modal-backdrop"><div class="modal contract-modal" role="dialog" aria-labelledby="contracttitle">
+    <div class="modal-head"><h3 id="contracttitle">${f.id ? `Edit ${esc(f.contract_no)}` : "New tenancy contract draft"}</h3><button class="modal-close" id="contractclose" aria-label="Close">×</button></div>
+    <div class="modal-body"><div class="contract-form-section"><h4>Deal and contract</h4><div class="form-grid">
+      <div class="field"><label for="ct_deal">Related deal</label><select class="input" id="ct_deal">${options}</select></div>
+      ${contractInput("ct_contract_date","Contract date",f.contract_date,"date")}${contractInput("ct_start","Start date",f.start_date,"date")}${contractInput("ct_end","End date",f.end_date,"date")}
+      ${contractInput("ct_landlord","Landlord / owner",f.landlord_name)}${contractInput("ct_tenant","Tenant",f.tenant_name)}${contractInput("ct_owner_phone","Owner phone",f.owner_phone,"tel")}${contractInput("ct_tenant_phone","Tenant phone",f.tenant_phone,"tel")}
+      ${contractInput("ct_rent","Annual rent (AED)",f.annual_rent,"number",'min="0" step="0.01"')}${contractInput("ct_deposit","Security deposit (AED)",f.security_deposit,"number",'min="0" step="0.01"')}${contractInput("ct_payment","Payment mode",f.payment_mode)}
+    </div></div>
+    <div class="contract-form-section"><h4>Official Ejari / DLD details</h4><div class="form-grid">
+      ${contractInput("ct_lessor","Lessor name",d.lessorName)}${contractInput("ct_lessor_id","Lessor Emirates ID",d.lessorEmiratesId)}${contractInput("ct_lessor_email","Lessor email",d.lessorEmail,"email")}${contractInput("ct_lessor_license","Lessor company license",d.lessorLicenseNo)}${contractInput("ct_lessor_authority","Lessor licensing authority",d.lessorLicensingAuthority)}
+      ${contractInput("ct_tenant_id","Tenant Emirates ID",d.tenantEmiratesId)}${contractInput("ct_tenant_email","Tenant email",d.tenantEmail,"email")}${contractInput("ct_tenant_license","Tenant company license",d.tenantLicenseNo)}${contractInput("ct_tenant_authority","Tenant licensing authority",d.tenantLicensingAuthority)}
+      ${contractInput("ct_plot","Plot no.",d.plotNo)}${contractInput("ct_makani","Makani no.",d.makaniNo)}${contractInput("ct_building","Building",d.buildingName)}${contractInput("ct_unit","Property / unit no.",d.propertyNo)}
+      <div class="field"><label for="ct_property_type">Property use</label><select class="input" id="ct_property_type">${["Residential","Commercial","Industrial"].map((type)=>`<option value="${type}" ${type === (d.propertyType || "Residential") ? "selected" : ""}>${type}</option>`).join("")}</select></div>
+      ${contractInput("ct_unit_type","Unit type",d.unitType)}${contractInput("ct_area_sqm","Area (sq.m)",d.propertyArea,"number",'min="0" step="0.01"')}${contractInput("ct_location","Location",d.location)}${contractInput("ct_premises_no","Premises no. (DEWA)",d.premisesNo)}
+      <div class="field" style="grid-column:1/-1"><label for="ct_terms">Additional terms</label><textarea class="input" id="ct_terms" rows="4">${esc(f.additional_terms || "")}</textarea></div>
+    </div></div>
+    <div class="contract-form-section"><h4>Xsite addendum</h4><div class="form-grid">
+      ${contractInput("ct_furnishing","Furnishing",a.furnishing)}${contractInput("ct_add_premises","Premises description",a.premises)}${contractInput("ct_add_unit","Unit number",a.unitNo)}${contractInput("ct_add_building","Building",a.building)}${contractInput("ct_add_area","Area / community",a.area)}${contractInput("ct_add_city","City / emirate",a.city)}
+      <div class="field" style="grid-column:1/-1"><label for="ct_add_terms">Custom addendum conditions</label><textarea class="input" id="ct_add_terms" rows="5">${esc(a.customTerms || "")}</textarea></div>
+    </div></div>
+    <div class="modal-actions"><span class="form-msg" id="contractmsg">${esc(f.msg || "")}</span><button class="btn btn-secondary" id="contractcancel">Cancel</button><button class="btn btn-secondary" id="contractdraft">Save draft</button><button class="btn btn-primary" id="contractfinal">Finalize & notify Accounts</button></div>
+    </div></div></div>`;
+}
+
+async function saveContract(status) {
+  const value = (id) => document.getElementById(id)?.value?.trim() || "";
+  const msg = document.getElementById("contractmsg");
+  if (status === "final" && !window.confirm("Finalize this contract? Final contracts cannot be edited and Accounts will be notified.")) return;
+  const payload = {
+    p_id: state.contractForm.id || null, p_deal_group: value("ct_deal"), p_status: status,
+    p_contract_date: value("ct_contract_date"), p_start_date: value("ct_start"), p_end_date: value("ct_end"),
+    p_landlord_name: value("ct_landlord"), p_tenant_name: value("ct_tenant"), p_owner_phone: value("ct_owner_phone"), p_tenant_phone: value("ct_tenant_phone"),
+    p_annual_rent: Number(value("ct_rent")), p_security_deposit: Number(value("ct_deposit")), p_payment_mode: value("ct_payment"), p_additional_terms: value("ct_terms"),
+    p_details: { lessorName:value("ct_lessor"), lessorEmiratesId:value("ct_lessor_id"), lessorEmail:value("ct_lessor_email"), lessorLicenseNo:value("ct_lessor_license"), lessorLicensingAuthority:value("ct_lessor_authority"), tenantEmiratesId:value("ct_tenant_id"), tenantEmail:value("ct_tenant_email"), tenantLicenseNo:value("ct_tenant_license"), tenantLicensingAuthority:value("ct_tenant_authority"), plotNo:value("ct_plot"), makaniNo:value("ct_makani"), buildingName:value("ct_building"), propertyNo:value("ct_unit"), propertyType:value("ct_property_type"), unitType:value("ct_unit_type"), propertyArea:value("ct_area_sqm"), location:value("ct_location"), premisesNo:value("ct_premises_no") },
+    p_addendum: { furnishing:value("ct_furnishing"), premises:value("ct_add_premises"), unitNo:value("ct_add_unit"), building:value("ct_add_building"), area:value("ct_add_area"), city:value("ct_add_city"), customTerms:value("ct_add_terms") },
+  };
+  if (!payload.p_deal_group || !payload.p_contract_date || !payload.p_start_date || !payload.p_end_date || !payload.p_landlord_name || !payload.p_tenant_name || !Number.isFinite(payload.p_annual_rent)) { msg.textContent = "Deal, dates, landlord, tenant, and annual rent are required."; return; }
+  const buttons = document.querySelectorAll("#contractdraft,#contractfinal"); buttons.forEach((button)=>button.disabled=true);
+  const result = await supabase.rpc("save_contract", payload);
+  if (result.error) { msg.textContent = result.error.message; buttons.forEach((button)=>button.disabled=false); return; }
+  state.contractForm = null; await reloadAfterWrite(reloadContracts, status === "final" ? "Final contract" : "Contract draft"); render();
+}
+
+async function fulfillAccountTask(container) {
+  const button = container.querySelector("[data-fulfilltask]"); button.disabled = true; button.textContent = "Creating…";
+  const result = await supabase.rpc("fulfill_account_task", { p_task_id: container.dataset.accounttask, p_doc_type: container.querySelector("[data-tasktype]").value,
+    p_doc_date: container.querySelector("[data-taskdate]").value, p_amount: Number(container.querySelector("[data-taskamount]").value), p_payment_method: container.querySelector("[data-taskpayment]").value.trim() });
+  if (result.error) { window.alert("Could not create document: " + result.error.message); button.disabled=false; button.textContent="Create"; return; }
+  await reloadAfterWrite(reloadContracts, "Invoice or receipt"); render();
+}
+
+function fill(value, style, cls = "dld-fill") { return `<span class="${cls}" style="${style}">${esc(value || "")}</span>`; }
+function viewContractPrint() {
+  const c = state.printContract;
+  if (!c) return "";
+  const d = c.details || {}, a = c.addendum || {};
+  const usageMarkStyle = d.propertyType === "Industrial" ? "left:25.2%;top:58.1%;" : d.propertyType === "Commercial" ? "left:43%;top:58.1%;" : "left:62.8%;top:58.1%;";
+  const addendumDescription = `${a.furnishing || ""} ${a.premises || "PREMISES"}, UNIT ${a.unitNo || d.propertyNo || ""}, ${a.building || d.buildingName || ""}, ${a.area || d.location || ""}, ${a.city || "DUBAI"}`.replace(/\s+/g," ").trim();
+  return `<div class="contract-print-shell"><div class="contract-print-toolbar"><div><strong>DLD Contract + Xsite Addendum</strong><div>${esc(c.contract_no)} · ${esc(c.tenant_name)} · ${esc(c.status.toUpperCase())}</div></div><div><button class="btn btn-secondary" id="printclose">Back</button> <button class="btn btn-primary" id="printnow">Print / Save PDF</button></div></div>
+    ${c.status === "draft" ? `<div class="contract-draft-watermark">DRAFT</div>` : ""}
+    <div class="dld-print-page"><img src="./contract-assets/ejari-page-1.png" alt="DLD tenancy contract page 1">
+      ${fill(showDate(c.contract_date),"left:8%;top:13.3%;width:18%")}${fill(c.landlord_name,"left:15.5%;top:20.5%;width:73%")}${fill(d.lessorName,"left:15.5%;top:23.2%;width:73%")}${fill(d.lessorEmiratesId,"left:22%;top:26%;width:62%")}${fill(d.lessorLicenseNo,"left:14%;top:28.6%;width:29%")}${fill(d.lessorLicensingAuthority,"left:63%;top:28.6%;width:25%")}${fill(d.lessorEmail,"left:15%;top:31.6%;width:69%")}${fill(c.owner_phone,"left:15%;top:34.2%;width:69%")}
+      ${fill(c.tenant_name,"left:15.5%;top:40.7%;width:70%")}${fill(d.tenantEmiratesId,"left:22%;top:43.5%;width:62%")}${fill(d.tenantLicenseNo,"left:14%;top:46.2%;width:29%")}${fill(d.tenantLicensingAuthority,"left:63%;top:46.2%;width:25%")}${fill(d.tenantEmail,"left:15%;top:49.2%;width:69%")}${fill(c.tenant_phone,"left:15%;top:51.9%;width:69%")}
+      ${fill("X",usageMarkStyle)}${fill(d.plotNo,"left:12%;top:61.1%;width:31%")}${fill(d.makaniNo,"left:61%;top:61.1%;width:28%")}${fill(d.buildingName,"left:15%;top:64%;width:28%")}${fill(d.propertyNo,"left:61%;top:64%;width:28%")}${fill(d.unitType,"left:15%;top:66.8%;width:28%")}${fill(d.propertyArea,"left:65%;top:66.8%;width:24%")}${fill(d.location,"left:12%;top:69.6%;width:31%")}${fill(d.premisesNo,"left:64%;top:69.6%;width:25%")}
+      ${fill(showDate(c.start_date),"left:21%;top:76.2%;width:14%")}${fill(showDate(c.end_date),"left:36%;top:76.2%;width:14%")}${fill(money(c.annual_rent),"left:63%;top:76.2%;width:25%")}${fill(money(c.annual_rent),"left:15%;top:79.2%;width:27%")}${fill(money(c.security_deposit),"left:65%;top:79.2%;width:23%")}${fill(c.payment_mode,"left:15%;top:81.9%;width:71%")}${fill(showDate(c.contract_date),"left:34%;top:94.7%;width:12%")}${fill(showDate(c.contract_date),"left:82%;top:94.7%;width:12%")}
+    </div>
+    <div class="dld-print-page"><img src="./contract-assets/ejari-page-2.png" alt="DLD tenancy contract page 2">${fill(showDate(c.contract_date),"left:34%;top:94.7%;width:12%")}${fill(showDate(c.contract_date),"left:82%;top:94.7%;width:12%")}</div>
+    <div class="dld-print-page"><img src="./contract-assets/ejari-page-3.png" alt="DLD tenancy contract page 3">${fill(c.additional_terms,"left:9.5%;top:36.7%;width:81%;height:16%;white-space:pre-line","dld-fill dld-terms-fill")}${fill(showDate(c.contract_date),"left:34%;top:91.6%;width:12%")}${fill(showDate(c.contract_date),"left:82%;top:91.6%;width:12%")}</div>
+    <div class="dld-print-page"><img src="./contract-assets/xsite-addendum-page-1.png" alt="Xsite addendum page 1">${fill(addendumDescription,"left:2.4%;top:14.6%;width:95%;background:white;padding:1px 4px","addendum-fill")}${fill(c.tenant_name,"left:9.5%;top:74.3%;width:35%;text-align:center","addendum-fill")}${fill(c.landlord_name,"left:52.5%;top:74.3%;width:35%;text-align:center","addendum-fill")}${fill(showDate(c.contract_date),"left:9.5%;top:79.4%;width:35%;text-align:center","addendum-fill")}${fill(showDate(c.contract_date),"left:52.5%;top:79.4%;width:35%;text-align:center","addendum-fill")}</div>
+    <div class="dld-print-page"><img src="./contract-assets/xsite-addendum-page-2.png" alt="Xsite addendum page 2">${a.customTerms ? fill(`ADDITIONAL MUTUALLY AGREED CONDITIONS\n${a.customTerms}`,"left:7%;top:64%;width:86%;min-height:12%;padding:6px","addendum-fill addendum-custom") : ""}${fill(c.tenant_name,"left:8%;top:52.8%;width:35%;text-align:center","addendum-fill")}${fill(c.landlord_name,"left:53%;top:52.8%;width:35%;text-align:center","addendum-fill")}${fill(showDate(c.contract_date),"left:8%;top:57.9%;width:35%;text-align:center","addendum-fill")}${fill(showDate(c.contract_date),"left:53%;top:57.9%;width:35%;text-align:center","addendum-fill")}</div>
+  </div>`;
 }
 
 // ── view: team management (owner) ────────────────────────
@@ -722,7 +901,7 @@ function viewTransactions() {
 
 // ── deal form (add / edit) ───────────────────────────────
 function emptyDealForm() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   return { groupId: null, editIds: [], deal_date: today, agent: "", agent2: "", third_party: "",
     deal_type: "Rent", unit: "", building: "", area: "", price: "", total_commission: "",
     commission_received: "", vat: "", commission_ex_vat: "", agent_business: "",
@@ -971,7 +1150,7 @@ function viewInvoices() {
 // ── doc modal ────────────────────────────────────────────
 function emptyDocForm() {
   return { id: null, doc_type: "receipt", dealLabel: "", client: "", description: "",
-    amount: "", doc_date: new Date().toISOString().slice(0, 10), payment_method: "", msg: "" };
+    amount: "", doc_date: todayIso(), payment_method: "", msg: "" };
 }
 function docFormFromRow(d) {
   return { id: d.id, doc_type: d.doc_type, dealLabel: dealLabelFor(d.deal_group),
@@ -1063,7 +1242,7 @@ async function saveDoc() {
 async function markPaid(id) {
   const { error } = await supabase.rpc("mark_invoice_paid", {
     p_doc_id: id,
-    p_paid_date: new Date().toISOString().slice(0, 10),
+    p_paid_date: todayIso(),
   });
   if (error) { window.alert("Could not update: " + error.message); return; }
   if (!await reloadAfterWrite(reloadDocs, "Invoice payment")) return;
@@ -1125,7 +1304,7 @@ function openCashForm() {
   const dates = availableMonths(state.cash, "as_at");
   const latest = state.cash.filter((c) => c.as_at === dates[0]);
   state.cashForm = {
-    as_at: new Date().toISOString().slice(0, 10),
+    as_at: todayIso(),
     lines: latest.map((c) => ({ label: c.label, amount: c.amount === null ? null : +c.amount })),
     msg: "",
   };
@@ -1317,6 +1496,11 @@ function wireScreen() {
   root.querySelectorAll("[data-requeststatus]").forEach((button) => button.onclick = () => { state.requestStatus = button.dataset.requeststatus; render(); });
   const newRequest = document.getElementById("newrequest"); if (newRequest) newRequest.onclick = () => { state.requestForm = { msg: "" }; render(); };
   root.querySelectorAll("[data-saverequest]").forEach((button) => button.onclick = () => saveRequestReview(button.closest("[data-requestrow]")));
+  // contracts, addenda, renewal reminders, and Accounts notifications
+  const newContract = document.getElementById("newcontract"); if (newContract) newContract.onclick = () => openContractForm();
+  root.querySelectorAll("[data-editcontract]").forEach((button) => button.onclick = () => openContractForm(state.contracts.find((c) => c.id === button.dataset.editcontract)));
+  root.querySelectorAll("[data-printcontract]").forEach((button) => button.onclick = () => { state.printContract = state.contracts.find((c) => c.id === button.dataset.printcontract) || null; render(); });
+  root.querySelectorAll("[data-fulfilltask]").forEach((button) => button.onclick = () => fulfillAccountTask(button.closest("[data-accounttask]")));
   // staff
   root.querySelectorAll("[data-staffbranch]").forEach((b) => b.onclick = () => { state.staffBranch = b.dataset.staffbranch; render(); });
   const sq = document.getElementById("staffq");
@@ -1365,6 +1549,17 @@ function wireModals() {
   const requestClose = document.getElementById("requestclose"); if (requestClose) requestClose.onclick = () => { state.requestForm = null; render(); };
   const requestCancel = document.getElementById("requestcancel"); if (requestCancel) requestCancel.onclick = () => { state.requestForm = null; render(); };
   const requestSave = document.getElementById("requestsave"); if (requestSave) requestSave.onclick = saveRequest;
+  // contract modal and print/PDF view
+  const contractClose = document.getElementById("contractclose"); if (contractClose) contractClose.onclick = () => { state.contractForm = null; render(); };
+  const contractCancel = document.getElementById("contractcancel"); if (contractCancel) contractCancel.onclick = () => { state.contractForm = null; render(); };
+  const contractDraft = document.getElementById("contractdraft"); if (contractDraft) contractDraft.onclick = () => saveContract("draft");
+  const contractFinal = document.getElementById("contractfinal"); if (contractFinal) contractFinal.onclick = () => saveContract("final");
+  const contractDeal = document.getElementById("ct_deal"); if (contractDeal && !state.contractForm?.id) contractDeal.onchange = () => {
+    const deal = dealGroupOptions().find((option) => option.group === contractDeal.value)?.deal;
+    state.contractForm = contractDraftFromDeal(deal); render();
+  };
+  const printClose = document.getElementById("printclose"); if (printClose) printClose.onclick = () => { state.printContract = null; render(); };
+  const printNow = document.getElementById("printnow"); if (printNow) printNow.onclick = () => window.print();
 }
 function rerenderTx() {
   const main = root.querySelector("main"); const focus = document.activeElement === document.getElementById("txq");
