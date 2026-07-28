@@ -20,14 +20,19 @@ const state = {
   screen: "dashboard",
   authMode: "signin",
   agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [], requests: [], contracts: [], accountTasks: [],
+  contacts: [], cashMovements: [],
   selectedAgent: null,
   txQuery: "", txType: "All", ledgerQuery: "",
   txMonth: null, ledgerMonth: null,
   invMonth: null, invType: "All", invQuery: "",
   cashDate: null,
   staffQuery: "", staffBranch: "All", requestStatus: "All",
+  contactQuery: "", contactType: "All",
+  cbMonth: null, cbChannel: "All", cbQuery: "",
+  dashQuery: "",
   dealForm: null, pwForm: false, docForm: null, cashForm: null, requestForm: null,
   contractForm: null, printContract: null, printInvoice: null,
+  contactForm: null, cashMoveForm: null,
 };
 
 // ── helpers ──────────────────────────────────────────────
@@ -74,8 +79,10 @@ function clearSensitiveState() {
   state.agents = []; state.deals = []; state.commission = []; state.cash = [];
   state.team = []; state.docs = []; state.staff = []; state.requests = [];
   state.contracts = []; state.accountTasks = [];
+  state.contacts = []; state.cashMovements = [];
   state.dealForm = null; state.pwForm = false; state.docForm = null;
   state.cashForm = null; state.requestForm = null; state.contractForm = null; state.printContract = null;
+  state.contactForm = null; state.cashMoveForm = null;
 }
 const COLUMNS = {
   agents: "id,name,role,month,agent_business_including_vat",
@@ -84,21 +91,44 @@ const COLUMNS = {
   cash_position: "id,as_at,label,amount,sort_order,month",
   profiles: "id,full_name,email,role,agent_name,created_at",
   money_docs: "id,doc_type,doc_no,deal_group,doc_date,client,description,amount,payment_method,status,month,details",
-  staff: "id,name,job,nationality,branch,card_number,card_expiry",
+  staff: "id,name,job,nationality,branch,card_number,card_expiry,birthday",
   agent_requests: "id,created_by,submitter_name,request_type,subject,deal_group,details,status,response,created_at,updated_at",
-  contracts: "id,contract_no,deal_group,status,contract_date,start_date,end_date,landlord_name,tenant_name,owner_phone,tenant_phone,annual_rent,security_deposit,payment_mode,additional_terms,details,addendum,created_by,finalized_by,finalized_at,created_at,updated_at",
+  contracts: "id,contract_no,deal_group,status,contract_date,start_date,end_date,landlord_name,tenant_name,owner_phone,tenant_phone,annual_rent,security_deposit,payment_mode,additional_terms,details,addendum,ejari_status,created_by,finalized_by,finalized_at,created_at,updated_at",
   account_tasks: "id,contract_id,task_type,status,money_doc_id,completed_by,completed_at,created_at",
+  contacts: "id,name,contact_type,phone,email,notes,last_contact,created_at,updated_at",
+  cash_movements: "id,movement_date,direction,channel,bank_account,agent_name,client,property,amount,reference,month,created_at",
 };
-async function fetchAll(table, orderColumn, ascending = true) {
+async function fetchAll(table, orderColumn, ascending = true, columns = COLUMNS[table]) {
   const rows = [];
   const pageSize = 1000;
   for (let from = 0; ; from += pageSize) {
-    const result = await supabase.from(table).select(COLUMNS[table]).order(orderColumn, { ascending }).range(from, from + pageSize - 1);
+    const result = await supabase.from(table).select(columns).order(orderColumn, { ascending }).range(from, from + pageSize - 1);
     if (result.error) throw new Error(`Could not load ${table}: ${result.error.message}`);
     rows.push(...(result.data || []));
     if ((result.data || []).length < pageSize) break;
   }
   return { data: rows, error: null };
+}
+// Some columns (ejari_status, staff.birthday) are added by the feature-merge
+// migration. Load with them, but fall back to the base column set if the
+// migration has not been applied yet, so contracts/staff still load.
+const OPTIONAL_COLUMNS = { contracts: ["ejari_status"], staff: ["birthday"] };
+async function fetchAllOptional(table, orderColumn, ascending = true) {
+  try { return await fetchAll(table, orderColumn, ascending); }
+  catch (error) {
+    const optional = OPTIONAL_COLUMNS[table] || [];
+    if (!/column .* does not exist/i.test(error.message) && !optional.some((c) => error.message.includes(c))) throw error;
+    const base = COLUMNS[table].split(",").filter((c) => !optional.includes(c)).join(",");
+    console.warn(`[xsite] ${table}: migration columns not applied yet — loading base fields.`);
+    return await fetchAll(table, orderColumn, ascending, base);
+  }
+}
+// Non-fatal fetch for features whose backend migration may not be applied yet
+// (contacts, cash_movements). A missing table/column degrades the feature to
+// empty instead of breaking the whole workspace load.
+async function fetchAllSafe(table, orderColumn, ascending = true) {
+  try { return await fetchAll(table, orderColumn, ascending); }
+  catch (error) { console.warn(`[xsite] ${table} unavailable — feature disabled until migration is applied:`, error.message); return { data: [] }; }
 }
 function downloadCsv(filename, rows, columns) {
   const blob = new Blob(["\uFEFF", toCsv(rows, columns)], { type: "text/csv;charset=utf-8" });
@@ -116,19 +146,22 @@ async function loadData() {
     state.agents = []; state.deals = []; state.commission = []; state.cash = [];
     state.team = []; state.docs = []; state.staff = []; state.requests = [];
     state.contracts = []; state.accountTasks = [];
+    state.contacts = []; state.cashMovements = [];
     return;
   }
-  const [ag, dl, cm, ch, tm, md, sf, rq, ct, at] = await Promise.all([
+  const [ag, dl, cm, ch, tm, md, sf, rq, ct, at, co, mv] = await Promise.all([
     fetchAll("agents", "name"),
     fetchAll("deals", "sno"),
     fetchAll("commission_entries", "agent_name"),
     roleIn("owner", "accounts", "admin") ? fetchAll("cash_position", "sort_order") : Promise.resolve({ data: [] }),
     roleIn("owner") ? fetchAll("profiles", "created_at") : Promise.resolve({ data: [] }),
     roleIn("owner", "accounts", "admin") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
-    roleIn("owner", "admin", "accounts") ? fetchAll("staff", "name") : Promise.resolve({ data: [] }),
+    roleIn("owner", "admin", "accounts") ? fetchAllOptional("staff", "name") : Promise.resolve({ data: [] }),
     fetchAll("agent_requests", "created_at", false),
-    fetchAll("contracts", "created_at", false),
+    fetchAllOptional("contracts", "created_at", false),
     roleIn("owner", "accounts", "admin") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin") ? fetchAllSafe("contacts", "name") : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin") ? fetchAllSafe("cash_movements", "movement_date", false) : Promise.resolve({ data: [] }),
   ]);
   state.agents = requireData(ag, "Could not load agents");
   state.deals = requireData(dl, "Could not load deals");
@@ -140,6 +173,10 @@ async function loadData() {
   state.requests = requireData(rq, "Could not load agent requests");
   state.contracts = requireData(ct, "Could not load contracts");
   state.accountTasks = requireData(at, "Could not load Accounts tasks");
+  state.contacts = requireData(co, "Could not load contacts");
+  state.cashMovements = requireData(mv, "Could not load cash and bank movements");
+  const cbmonths = availableMonths(state.cashMovements, "month");
+  if (!state.cbMonth || !cbmonths.includes(state.cbMonth)) state.cbMonth = cbmonths[0] || null;
   const months = availableMonths(state.deals, "month");
   if (!state.txMonth || !months.includes(state.txMonth)) state.txMonth = months[0] || null;
   const lmonths = availableMonths(state.commission, "month");
@@ -176,9 +213,21 @@ async function reloadRequests() {
   state.requests = requireData(result, "Could not reload agent requests");
 }
 
+async function reloadContacts() {
+  const result = await fetchAll("contacts", "name");
+  state.contacts = requireData(result, "Could not reload contacts");
+}
+
+async function reloadCashMovements() {
+  const result = await fetchAll("cash_movements", "movement_date", false);
+  state.cashMovements = requireData(result, "Could not reload cash and bank movements");
+  const cbmonths = availableMonths(state.cashMovements, "month");
+  if (!state.cbMonth || !cbmonths.includes(state.cbMonth)) state.cbMonth = cbmonths[0] || null;
+}
+
 async function reloadContracts() {
   const [contracts, tasks, docs] = await Promise.all([
-    fetchAll("contracts", "created_at", false),
+    fetchAllOptional("contracts", "created_at", false),
     roleIn("owner", "accounts", "admin") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
     roleIn("owner", "accounts", "admin") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
   ]);
@@ -333,9 +382,11 @@ function renderApp() {
   <nav class="nav">
     <div class="nav-brand"><img src="./xsite-logo.png" alt="Xsite"></div>
     ${roleIn("owner", "accounts", "admin") ? navLink("dashboard", "Dashboard") : ""}
+    ${roleIn("owner", "admin") ? navLink("contacts", "Contacts") : ""}
     ${showTx ? navLink("transactions", "Transactions") : ""}
     ${roleIn("owner", "accounts", "admin") ? navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts") : ""}
     ${roleIn("owner", "accounts", "admin") ? navLink("invoices", "Invoices & Receipts") : ""}
+    ${roleIn("owner", "accounts") ? navLink("cashbank", "Cash & Bank") : ""}
     ${showLedger ? navLink("ledgers", ledgerLabel) : ""}
     ${roleIn("pending") ? "" : navLink("requests", pendingRequests ? `Requests (${pendingRequests})` : "Requests")}
     ${roleIn("owner", "admin", "accounts") ? navLink("staff", "Staff") : ""}
@@ -350,16 +401,18 @@ function renderApp() {
   let body = "";
   if (state.fatalError) body = viewFatalError();
   else if (roleIn("pending")) body = viewPending();
+  else if (state.screen === "contacts" && roleIn("owner", "admin")) body = viewContacts();
   else if (state.screen === "transactions" && showTx) body = viewTransactions();
   else if (state.screen === "contracts" && roleIn("owner", "accounts", "admin")) body = viewContracts();
   else if (state.screen === "invoices" && roleIn("owner", "accounts", "admin")) body = viewInvoices();
+  else if (state.screen === "cashbank" && roleIn("owner", "accounts")) body = viewCashBank();
   else if (state.screen === "ledgers" && showLedger) body = viewLedgers();
   else if (state.screen === "requests") body = viewRequests();
   else if (state.screen === "staff" && roleIn("owner", "admin", "accounts")) body = viewStaff();
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else if (roleIn("agent")) body = viewLedgers();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint();
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewContactModal() + viewCashMoveModal();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
@@ -452,7 +505,8 @@ function viewStaff() {
     return `<tr>
       <td>${esc(s.name)}</td><td>${esc(s.job || "—")}</td><td>${esc(s.nationality || "—")}</td>
       <td>${esc(s.branch || "—")}</td><td>${esc(s.card_number || "—")}</td>
-      <td><span class="${expClass}">${esc(expLabel)}</span></td></tr>`;
+      <td><span class="${expClass}">${esc(expLabel)}</span></td>
+      <td>${s.birthday && isoRe.test(s.birthday) ? esc(showDate(s.birthday)) : "—"}</td></tr>`;
   }).join("");
   return `
   <div>
@@ -472,8 +526,8 @@ function viewStaff() {
     <div class="sheet">
       <div class="sheet-hint">Full roster — from official labour work-permit lists</div>
       <div class="table-wrap"><table class="grid" style="min-width:900px">
-        <thead><tr><th>Name</th><th>Job</th><th>Nationality</th><th>Branch</th><th>Work-permit card</th><th>Card expiry</th></tr></thead>
-        <tbody>${body || `<tr><td colspan="6"><div class="md-empty" style="border:0">No employees match.</div></td></tr>`}</tbody>
+        <thead><tr><th>Name</th><th>Job</th><th>Nationality</th><th>Branch</th><th>Work-permit card</th><th>Card expiry</th><th>Birthday</th></tr></thead>
+        <tbody>${body || `<tr><td colspan="7"><div class="md-empty" style="border:0">No employees match.</div></td></tr>`}</tbody>
       </table></div>
     </div>
   </div>`;
@@ -612,6 +666,7 @@ function openContractForm(contract = null) {
 function viewContracts() {
   const canManage = roleIn("owner", "admin");
   const canFulfill = roleIn("owner", "accounts");
+  const canEjari = roleIn("owner", "admin", "accounts");
   const reminders = state.contracts.filter((c) => c.status === "final")
     .map((contract) => ({ contract, renewal: renewalStatus(contract.end_date) }))
     .filter((item) => ["due", "expired"].includes(item.renewal.status))
@@ -619,9 +674,16 @@ function viewContracts() {
   const contractRows = state.contracts.map((contract) => {
     const renewal = contract.status === "final" ? renewalStatus(contract.end_date) : { status: "draft", days: null };
     const renewalText = renewal.status === "expired" ? `${Math.abs(renewal.days)} days overdue` : renewal.status === "due" ? `${renewal.days} days remaining` : "Not due";
+    const ejariRegistered = contract.ejari_status === "registered";
+    const ejariCell = contract.status !== "final"
+      ? `<span class="text-muted">—</span>`
+      : canEjari
+        ? `<button class="btn btn-mini ${ejariRegistered ? "btn-secondary" : "btn-primary"}" data-toggleejari="${contract.id}">${ejariRegistered ? "Registered" : "Register Ejari"}</button>`
+        : `<span class="tag ${ejariRegistered ? "tag-neutral" : "tag-accent"}">${ejariRegistered ? "Registered" : "Pending"}</span>`;
     return `<tr><td><strong>${esc(contract.contract_no)}</strong></td><td>${esc(dealLabelFor(contract.deal_group))}</td>
       <td>${esc(contract.landlord_name)} → ${esc(contract.tenant_name)}</td><td>${showDate(contract.start_date)} – ${showDate(contract.end_date)}</td>
       <td><span class="tag ${contract.status === "draft" ? "tag-accent" : "tag-neutral"}">${esc(contract.status)}</span></td>
+      <td>${ejariCell}</td>
       <td><span class="${renewal.status === "expired" ? "expiry-days is-overdue" : renewal.status === "due" ? "expiry-days" : "text-muted"}">${esc(renewalText)}</span></td>
       <td style="white-space:nowrap">${canManage && contract.status === "draft" ? `<button class="btn btn-secondary btn-mini" data-editcontract="${contract.id}">Edit</button> ` : ""}<button class="btn btn-primary btn-mini" data-printcontract="${contract.id}">View / print</button></td></tr>`;
   }).join("");
@@ -647,7 +709,7 @@ function viewContracts() {
     ${roleIn("owner", "accounts", "admin") && state.accountTasks.length ? `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Accounts notifications</h3><span class="tag tag-accent">${state.accountTasks.filter((t)=>t.status==="pending").length} pending</span></div>
       <div class="table-wrap"><table class="grid"><thead><tr><th>Contract</th><th>Tenant</th><th>Contract value</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div></section>` : ""}
     <div class="sheet"><div class="sheet-hint">${roleIn("agent") ? "Only finalized contracts linked to your deals are visible" : `${state.contracts.length} saved contract records`}</div>
-      <div class="table-wrap"><table class="grid" style="min-width:1000px"><thead><tr><th>Contract</th><th>Deal</th><th>Parties</th><th>Term</th><th>Status</th><th>Renewal</th><th></th></tr></thead><tbody>${contractRows || `<tr><td colspan="7"><div class="md-empty" style="border:0">No contracts yet.</div></td></tr>`}</tbody></table></div></div>
+      <div class="table-wrap"><table class="grid" style="min-width:1080px"><thead><tr><th>Contract</th><th>Deal</th><th>Parties</th><th>Term</th><th>Status</th><th>Ejari</th><th>Renewal</th><th></th></tr></thead><tbody>${contractRows || `<tr><td colspan="8"><div class="md-empty" style="border:0">No contracts yet.</div></td></tr>`}</tbody></table></div></div>
   </div>`;
 }
 
@@ -710,7 +772,9 @@ async function saveContract(status) {
   const buttons = document.querySelectorAll("#contractdraft,#contractfinal"); buttons.forEach((button)=>button.disabled=true);
   const result = await supabase.rpc("save_contract", payload);
   if (result.error) { msg.textContent = result.error.message; buttons.forEach((button)=>button.disabled=false); return; }
-  state.contractForm = null; await reloadAfterWrite(reloadContracts, status === "final" ? "Final contract" : "Contract draft"); render();
+  state.contractForm = null; await reloadAfterWrite(reloadContracts, status === "final" ? "Final contract" : "Contract draft");
+  await syncContractContacts(payload);
+  render();
 }
 
 async function fulfillAccountTask(container) {
@@ -836,13 +900,66 @@ function viewDashboard() {
       </div>
     </section>`;
   const strip = cashCard ? `<div class="fin-strip">${cashCard}${expiryCard}</div>` : expiryCard;
+
+  // Daily control — today's business progress + activity feed.
+  const daily = dailyControl();
+  const deptBar = (dept) => {
+    const count = daily.deptCounts[dept] || 0;
+    const pct = Math.round((count / daily.maxDept) * 100);
+    return `<div class="dept-progress"><div class="dept-progress-head"><span>${dept}</span><strong>${count}</strong></div><div class="dept-progress-track"><div class="dept-progress-fill" style="width:${pct}%"></div></div></div>`;
+  };
+  const dailySection = `
+    <section class="md-section" style="margin-bottom:20px">
+      <div class="md-section-header"><h3>Today's business progress</h3><span class="text-muted" style="font-size:11px">${showDate(todayIso())}</span></div>
+      <div class="md-kpi-grid" style="margin-bottom:16px">
+        <div class="md-kpi"><span class="card-kicker">Contracts today</span><span class="md-kpi-value">${daily.contractsToday.length}</span></div>
+        <div class="md-kpi"><span class="card-kicker">Receipts today</span><span class="md-kpi-value">${daily.receiptsToday.length}</span><span class="md-kpi-detail">${money(Math.round(daily.receiptCash))} received</span></div>
+        <div class="md-kpi"><span class="card-kicker">Invoices today</span><span class="md-kpi-value">${daily.invoicesToday.length}</span></div>
+        <div class="md-kpi"><span class="card-kicker">New contacts today</span><span class="md-kpi-value">${daily.contactsToday.length}</span><span class="md-kpi-detail">${state.contacts.length} total</span></div>
+      </div>
+      <div class="fin-strip">
+        <div><h4 style="margin:0 0 10px;font-size:13px">Department progress</h4>${["Sales","Accounts","CRM"].map(deptBar).join("")}</div>
+        <div><h4 style="margin:0 0 10px;font-size:13px">Today's activity</h4>${daily.activity.length
+          ? `<div class="activity-feed">${daily.activity.map((a) => `<div class="activity-item"><span class="tag tag-neutral">${a.dept}</span><span>${esc(a.text)}</span></div>`).join("")}</div>`
+          : `<p class="text-muted" style="font-size:12px;margin:0">No activity recorded yet today.</p>`}</div>
+      </div>
+    </section>`;
+
+  // Extra alert cards: Ejari pending + upcoming staff birthdays.
+  const ejari = ejariPending();
+  const birthdays = birthdayAlerts();
+  const ejariCard = `
+    <section class="md-section">
+      <div class="md-section-header"><h3>Ejari pending</h3><span class="tag ${ejari.length ? "tag-accent" : "tag-neutral"}">${ejari.length}</span></div>
+      ${ejari.length ? `<div class="expiry-list">${ejari.slice(0, 6).map((c) => `<div class="expiry-row"><div><strong>${esc(c.contract_no || "—")} · ${esc(c.tenant_name || "")}</strong><div class="text-muted">ends ${showDate(c.end_date)}</div></div><span class="expiry-days">Not registered</span></div>`).join("")}</div>` : `<p class="text-muted" style="font-size:12px;margin:0">All finalized contracts are Ejari-registered.</p>`}
+    </section>`;
+  const birthdayCard = `
+    <section class="md-section">
+      <div class="md-section-header"><h3>Staff birthdays</h3><span class="tag ${birthdays.length ? "tag-accent" : "tag-neutral"}">${birthdays.length}</span></div>
+      ${birthdays.length ? `<div class="expiry-list">${birthdays.slice(0, 6).map((b) => `<div class="expiry-row"><div><strong>${esc(b.name)}</strong><div class="text-muted">${esc(b.job || "")}</div></div><span class="expiry-days">${b.dateLabel} · ${b.days === 0 ? "today" : `${b.days}d`}</span></div>`).join("")}</div>` : `<p class="text-muted" style="font-size:12px;margin:0">No birthdays in the next 30 days.</p>`}
+    </section>`;
+  const alertStrip = `<div class="fin-strip" style="margin-top:20px">${ejariCard}${birthdayCard}</div>`;
+
+  // Global search across contacts, contracts, and deals.
+  const searchResults = dashboardSearch(state.dashQuery);
+  const searchBox = `
+    <div class="dash-search">
+      <input class="input" id="dashsearch" type="search" placeholder="Search contacts, contracts, and deals…" value="${esc(state.dashQuery)}">
+      ${state.dashQuery.trim() ? `<div class="dash-search-results">${searchResults.length
+        ? searchResults.map((r) => `<button class="dash-search-item" data-gotoscreen="${r.screen}"><strong>${esc(r.label)}</strong><span class="text-muted">${esc(r.detail)}</span></button>`).join("")
+        : `<div class="md-empty" style="border:0">No matches.</div>`}</div>` : ""}
+    </div>`;
+
   return `
   <div class="md-dashboard">
     <header class="md-dashboard-header">
       <div><span class="card-kicker">${esc(kicker)}</span><h1 style="margin-top:4px">${monthLabel(state.txMonth)} Overview</h1><p class="text-muted" style="margin:0">Live from the Xsite database.</p></div>
     </header>
+    ${searchBox}
+    ${dailySection}
     ${kpis}
     ${strip}
+    ${alertStrip}
   </div>`;
 }
 
@@ -1624,6 +1741,307 @@ function exportLedger() {
   ]);
 }
 
+// ── view: contacts (owner + admin) ───────────────────────
+const CONTACT_TYPES = ["Buyer", "Seller", "Tenant", "Landlord"];
+function emptyContactForm() {
+  return { id: null, name: "", contact_type: "Tenant", phone: "", email: "", last_contact: "", notes: "", msg: "" };
+}
+function contactFormFromRow(c) {
+  return { id: c.id, name: c.name || "", contact_type: c.contact_type || "Tenant", phone: c.phone || "",
+    email: c.email || "", last_contact: c.last_contact || "", notes: c.notes || "", msg: "" };
+}
+function viewContacts() {
+  const canManage = roleIn("owner", "admin");
+  const q = state.contactQuery.trim().toLowerCase();
+  const typeTabs = ["All", ...CONTACT_TYPES].map((t) =>
+    `<button class="tab ${state.contactType === t ? "is-active" : ""}" data-contacttype="${esc(t)}">${esc(t)}${t === "All" ? ` (${state.contacts.length})` : ""}</button>`).join("");
+  const rows = state.contacts.filter((c) =>
+    (state.contactType === "All" || c.contact_type === state.contactType) &&
+    (!q || [c.name, c.contact_type, c.phone, c.email, c.notes].join(" ").toLowerCase().includes(q)));
+  const body = rows.map((c) => `<tr>
+    <td><strong>${esc(c.name)}</strong></td>
+    <td><span class="tag tag-neutral">${esc(c.contact_type)}</span></td>
+    <td>${esc(c.phone || "—")}</td><td>${esc(c.email || "—")}</td>
+    <td>${c.last_contact ? esc(showDate(c.last_contact)) : "—"}</td>
+    <td class="tp-cell">${esc(c.notes || "—")}</td>
+    ${canManage ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editcontact="${c.id}">Edit</button><button class="btn btn-secondary btn-mini" data-deletecontact="${c.id}">Delete</button></div></td>` : ""}</tr>`).join("");
+  return `<div>
+    <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div><span class="card-kicker">CRM / Contacts</span><h1 style="margin-top:4px">Contacts</h1><p class="text-muted" style="margin:0">Buyers, sellers, tenants, and landlords — auto-synced from contracts.</p></div>
+      ${canManage ? `<button class="btn btn-primary" id="newcontact">+ New contact</button>` : ""}
+    </div>
+    <div class="tx-toolbar">
+      <div class="tabs">${typeTabs}</div>
+      <input class="input" id="contactq" type="search" placeholder="Search name, phone, email, notes…" value="${esc(state.contactQuery)}">
+      <span class="text-muted" style="font-size:12px">${rows.length} shown</span>
+    </div>
+    <div class="sheet"><div class="sheet-hint">${state.contacts.length} contact records</div>
+      <div class="table-wrap"><table class="grid" style="min-width:900px">
+        <thead><tr><th>Name</th><th>Type</th><th>Phone</th><th>Email</th><th>Last contact</th><th>Notes</th>${canManage ? "<th></th>" : ""}</tr></thead>
+        <tbody>${body || `<tr><td colspan="${canManage ? 7 : 6}"><div class="md-empty" style="border:0">No contacts match.</div></td></tr>`}</tbody>
+      </table></div>
+    </div>
+  </div>`;
+}
+function viewContactModal() {
+  const f = state.contactForm;
+  if (!f) return "";
+  const typeOpts = CONTACT_TYPES.map((t) => `<option value="${t}" ${f.contact_type === t ? "selected" : ""}>${t}</option>`).join("");
+  return `<div class="modal-backdrop">
+    <div class="modal" style="width:min(560px,100%)" role="dialog" aria-labelledby="contacttitle">
+      <div class="modal-head"><h3 id="contacttitle">${f.id ? "Edit contact" : "New contact"}</h3><button class="modal-close" id="contactclose2" aria-label="Close">×</button></div>
+      <div class="modal-body">
+        <div class="form-grid" style="grid-template-columns:1fr 1fr">
+          <div class="field"><label for="co_name">Name</label><input class="input" id="co_name" maxlength="200" value="${esc(f.name)}"></div>
+          <div class="field"><label for="co_type">Type</label><select class="input" id="co_type">${typeOpts}</select></div>
+          <div class="field"><label for="co_phone">Phone</label><input class="input" id="co_phone" type="tel" maxlength="60" value="${esc(f.phone)}"></div>
+          <div class="field"><label for="co_email">Email</label><input class="input" id="co_email" type="email" maxlength="200" value="${esc(f.email)}"></div>
+          <div class="field"><label for="co_last">Last contact</label><input class="input" id="co_last" type="date" value="${esc(f.last_contact)}"></div>
+          <div class="field" style="grid-column:1/-1"><label for="co_notes">Notes</label><textarea class="input" id="co_notes" rows="4" maxlength="2000">${esc(f.notes)}</textarea></div>
+        </div>
+        <div class="modal-actions"><span class="form-msg" id="contactmsg2">${esc(f.msg || "")}</span><button class="btn btn-secondary" id="contactcancel2">Cancel</button><button class="btn btn-primary" id="contactsave2">${f.id ? "Save changes" : "Save contact"}</button></div>
+      </div>
+    </div>
+  </div>`;
+}
+async function saveContactForm() {
+  const f = state.contactForm;
+  const g = (id) => document.getElementById(id).value;
+  const msg = document.getElementById("contactmsg2");
+  const name = g("co_name").trim();
+  const email = g("co_email").trim();
+  if (name.length < 2) { msg.textContent = "Enter a contact name."; return; }
+  if (email && !document.getElementById("co_email").checkValidity()) { msg.textContent = "Enter a valid email address."; return; }
+  const btn = document.getElementById("contactsave2"); btn.disabled = true; btn.textContent = "Saving…";
+  const { error } = await supabase.rpc("save_contact", {
+    p_id: f.id, p_name: name, p_contact_type: g("co_type"),
+    p_phone: g("co_phone").trim() || null, p_email: email || null,
+    p_notes: g("co_notes").trim() || null, p_last_contact: g("co_last") || null,
+  });
+  if (error) { msg.textContent = error.message; btn.disabled = false; btn.textContent = f.id ? "Save changes" : "Save contact"; return; }
+  if (!await reloadAfterWrite(reloadContacts, "Contact")) return;
+  state.contactForm = null; render();
+}
+async function deleteContact(id) {
+  const c = state.contacts.find((x) => x.id === id);
+  if (!c || !window.confirm(`Delete contact ${c.name}?`)) return;
+  const { error } = await supabase.rpc("delete_contact", { p_id: id });
+  if (error) { window.alert("Could not delete: " + error.message); return; }
+  if (!await reloadAfterWrite(reloadContacts, "Contact deletion")) return;
+  render();
+}
+// After a contract is saved, keep landlord + tenant in the contacts directory
+// (best-effort; ignores duplicates and permission failures silently).
+async function syncContractContacts(contract) {
+  if (!roleIn("owner", "admin") || !contract) return;
+  const parties = [
+    { name: contract.p_landlord_name, type: "Landlord", phone: contract.p_owner_phone },
+    { name: contract.p_tenant_name, type: "Tenant", phone: contract.p_tenant_phone },
+  ];
+  for (const party of parties) {
+    if (!party.name || !party.name.trim()) continue;
+    try { await supabase.rpc("upsert_contact_by_name", { p_name: party.name.trim(), p_contact_type: party.type, p_phone: party.phone || null }); }
+    catch { /* non-fatal */ }
+  }
+  try { await reloadContacts(); } catch { /* non-fatal */ }
+}
+
+// ── view: cash & bank movements (owner + accounts) ───────
+const CB_BANKS = ["Mashreq", "Emirates NBD Islamic", "Other bank"];
+function cashBankSummary(rows) {
+  const sum = (fn) => rows.filter(fn).reduce((s, r) => s + (+r.amount || 0), 0);
+  const cashInHand = sum((r) => r.channel === "cash" && r.direction === "in") - sum((r) => r.channel === "cash" && r.direction === "out");
+  const bankRows = rows.filter((r) => r.channel === "bank");
+  const banks = [...new Set(bankRows.map((r) => r.bank_account || "Other bank"))].sort();
+  const perBank = banks.map((b) => ({
+    bank: b,
+    net: sum((r) => r.channel === "bank" && (r.bank_account || "Other bank") === b && r.direction === "in") - sum((r) => r.channel === "bank" && (r.bank_account || "Other bank") === b && r.direction === "out"),
+    count: bankRows.filter((r) => (r.bank_account || "Other bank") === b).length,
+  }));
+  const bankTotal = perBank.reduce((s, x) => s + x.net, 0);
+  return { cashInHand, bankTotal, perBank };
+}
+function emptyCashMoveForm() {
+  return { id: null, movement_date: todayIso(), direction: "in", channel: "cash", bank_account: "Mashreq",
+    agent_name: "", client: "", property: "", amount: "", reference: "", msg: "" };
+}
+function cashMoveFormFromRow(r) {
+  return { id: r.id, movement_date: r.movement_date || todayIso(), direction: r.direction || "in", channel: r.channel || "cash",
+    bank_account: r.bank_account || "Mashreq", agent_name: r.agent_name || "", client: r.client || "",
+    property: r.property || "", amount: r.amount ?? "", reference: r.reference || "", msg: "" };
+}
+function viewCashBank() {
+  const canEdit = roleIn("owner", "accounts");
+  const months = availableMonths(state.cashMovements, "month");
+  const monthTabs = months.map((m) => `<button class="tab ${state.cbMonth === m ? "is-active" : ""}" data-cbmonth="${m}">${monthLabel(m)}</button>`).join("");
+  const channelTabs = ["All", "Cash", "Bank"].map((t) => `<button class="tab ${state.cbChannel === t ? "is-active" : ""}" data-cbchannel="${t}">${t}</button>`).join("");
+  const q = state.cbQuery.trim().toLowerCase();
+  const monthRows = state.cashMovements.filter((r) => !state.cbMonth || r.month === state.cbMonth);
+  const summary = cashBankSummary(monthRows);
+  const rows = monthRows.filter((r) =>
+    (state.cbChannel === "All" || (state.cbChannel === "Cash" ? r.channel === "cash" : r.channel === "bank")) &&
+    (!q || [r.agent_name, r.client, r.property, r.bank_account, r.reference].join(" ").toLowerCase().includes(q)));
+  const bankCards = summary.perBank.map((b) => `<div class="md-kpi"><span class="card-kicker">${esc(b.bank)}</span><span class="md-kpi-value">${money(Math.round(b.net))}</span><span class="md-kpi-detail">${b.count} movement${b.count === 1 ? "" : "s"}</span></div>`).join("");
+  const body = rows.map((r) => `<tr>
+    <td>${esc(showDate(r.movement_date))}</td>
+    <td><span class="tag ${r.direction === "in" ? "tag-neutral" : "tag-accent"}">${r.direction === "in" ? "In" : "Out"}</span></td>
+    <td>${r.channel === "cash" ? "Cash in hand" : "Bank transfer"}</td>
+    <td>${esc(r.channel === "bank" ? (r.bank_account || "—") : "—")}</td>
+    <td>${esc(r.agent_name || "—")}</td><td>${esc(r.client || "—")}</td><td>${esc(r.property || "—")}</td>
+    <td class="numeric">${money(r.amount)}</td><td>${esc(r.reference || "—")}</td>
+    ${canEdit ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editcm="${r.id}">Edit</button><button class="btn btn-secondary btn-mini" data-deletecm="${r.id}">Delete</button></div></td>` : ""}</tr>`).join("");
+  return `<div>
+    <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div><span class="card-kicker">Accounts / Cash & Bank</span><h1 style="margin-top:4px">Cash & Bank</h1><p class="text-muted" style="margin:0">Cash-in-hand and bank movements — ${monthLabel(state.cbMonth)}.</p></div>
+      ${canEdit ? `<button class="btn btn-primary" id="newcm">+ New movement</button>` : ""}
+    </div>
+    <section class="md-kpi-grid" style="margin-bottom:20px">
+      <div class="md-kpi is-accent"><span class="card-kicker">Cash in hand</span><span class="md-kpi-value">${money(Math.round(summary.cashInHand))}</span><span class="md-kpi-detail">Net cash movements</span></div>
+      <div class="md-kpi"><span class="card-kicker">Bank total</span><span class="md-kpi-value">${money(Math.round(summary.bankTotal))}</span><span class="md-kpi-detail">Across all accounts</span></div>
+      ${bankCards}
+    </section>
+    <div class="tx-toolbar">
+      ${months.length ? `<div class="tabs">${monthTabs}</div>` : ""}
+      <input class="input" id="cbq" type="search" placeholder="Search agent, client, property, bank, reference…" value="${esc(state.cbQuery)}">
+      <div class="tabs">${channelTabs}</div>
+      <span class="text-muted" style="font-size:12px">${rows.length} movements</span>
+    </div>
+    <div class="sheet"><div class="sheet-hint">Cash and bank register — newest first</div>
+      <div class="table-wrap"><table class="grid" style="min-width:1050px">
+        <thead><tr><th>Date</th><th>Direction</th><th>Channel</th><th>Bank</th><th>Agent</th><th>Client</th><th>Property</th><th>Amount</th><th>Reference</th>${canEdit ? "<th></th>" : ""}</tr></thead>
+        <tbody>${body || `<tr><td colspan="${canEdit ? 10 : 9}"><div class="md-empty" style="border:0">No movements in ${monthLabel(state.cbMonth)} yet.</div></td></tr>`}</tbody>
+      </table></div>
+    </div>
+  </div>`;
+}
+function viewCashMoveModal() {
+  const f = state.cashMoveForm;
+  if (!f) return "";
+  const agentNames = state.agents.map((a) => a.name);
+  const dl = `<datalist id="cmagents">${agentNames.map((n) => `<option value="${esc(n)}">`).join("")}</datalist>`;
+  const bankOpts = CB_BANKS.map((b) => `<option value="${esc(b)}" ${f.bank_account === b ? "selected" : ""}>${esc(b)}</option>`).join("");
+  return `<div class="modal-backdrop">
+    <div class="modal" style="width:min(680px,100%)" role="dialog" aria-labelledby="cmtitle">
+      <div class="modal-head"><h3 id="cmtitle">${f.id ? "Edit movement" : "New cash / bank movement"}</h3><button class="modal-close" id="cmclose" aria-label="Close">×</button></div>
+      <div class="modal-body">${dl}
+        <div class="form-grid" style="grid-template-columns:1fr 1fr">
+          <div class="field"><label for="cm_date">Date</label><input class="input" id="cm_date" type="date" value="${esc(f.movement_date)}"></div>
+          <div class="field"><label for="cm_dir">Direction</label><select class="input" id="cm_dir"><option value="in" ${f.direction === "in" ? "selected" : ""}>In — received</option><option value="out" ${f.direction === "out" ? "selected" : ""}>Out — paid</option></select></div>
+          <div class="field"><label for="cm_channel">Channel</label><select class="input" id="cm_channel"><option value="cash" ${f.channel === "cash" ? "selected" : ""}>Cash in hand</option><option value="bank" ${f.channel === "bank" ? "selected" : ""}>Bank transfer</option></select></div>
+          <div class="field" id="cm_bankwrap" style="${f.channel === "bank" ? "" : "display:none"}"><label for="cm_bank">Bank account</label><select class="input" id="cm_bank">${bankOpts}</select></div>
+          <div class="field"><label for="cm_agent">Agent</label><input class="input" id="cm_agent" list="cmagents" value="${esc(f.agent_name)}"></div>
+          <div class="field"><label for="cm_amount">Amount (AED)</label><input class="input" id="cm_amount" type="number" min="0" step="0.01" value="${esc(f.amount)}"></div>
+          <div class="field"><label for="cm_client">Client</label><input class="input" id="cm_client" maxlength="200" value="${esc(f.client)}"></div>
+          <div class="field"><label for="cm_property">Property</label><input class="input" id="cm_property" maxlength="200" value="${esc(f.property)}"></div>
+          <div class="field" style="grid-column:1/-1"><label for="cm_ref">Reference</label><input class="input" id="cm_ref" maxlength="200" value="${esc(f.reference)}" placeholder="Cheque no, transfer ref, remarks"></div>
+        </div>
+        <div class="modal-actions"><span class="form-msg" id="cmmsg">${esc(f.msg || "")}</span><button class="btn btn-secondary" id="cmcancel">Cancel</button><button class="btn btn-primary" id="cmsave">${f.id ? "Save changes" : "Save movement"}</button></div>
+      </div>
+    </div>
+  </div>`;
+}
+async function saveCashMovement() {
+  const f = state.cashMoveForm;
+  const g = (id) => document.getElementById(id).value;
+  const msg = document.getElementById("cmmsg");
+  const amount = parseFloat(g("cm_amount"));
+  if (!g("cm_date")) { msg.textContent = "Date is required."; return; }
+  if (!Number.isFinite(amount) || amount < 0) { msg.textContent = "Enter a valid amount."; return; }
+  const channel = g("cm_channel");
+  const btn = document.getElementById("cmsave"); btn.disabled = true; btn.textContent = "Saving…";
+  const { error } = await supabase.rpc("save_cash_movement", {
+    p_id: f.id, p_movement_date: g("cm_date"), p_direction: g("cm_dir"), p_channel: channel,
+    p_bank_account: channel === "bank" ? g("cm_bank") : null,
+    p_agent_name: g("cm_agent").trim() || null, p_client: g("cm_client").trim() || null,
+    p_property: g("cm_property").trim() || null, p_amount: amount, p_reference: g("cm_ref").trim() || null,
+  });
+  if (error) { msg.textContent = error.message; btn.disabled = false; btn.textContent = f.id ? "Save changes" : "Save movement"; return; }
+  if (!await reloadAfterWrite(reloadCashMovements, "Cash movement")) return;
+  state.cbMonth = g("cm_date").slice(0, 7); state.cashMoveForm = null; render();
+}
+async function deleteCashMovement(id) {
+  const r = state.cashMovements.find((x) => x.id === id);
+  if (!r || !window.confirm(`Delete this ${money(r.amount)} movement?`)) return;
+  const { error } = await supabase.rpc("delete_cash_movement", { p_id: id });
+  if (error) { window.alert("Could not delete: " + error.message); return; }
+  if (!await reloadAfterWrite(reloadCashMovements, "Cash movement deletion")) return;
+  render();
+}
+
+// ── ejari status toggle (owner/admin/accounts) ───────────
+async function toggleEjari(id) {
+  const c = state.contracts.find((x) => x.id === id);
+  if (!c) return;
+  const next = c.ejari_status === "registered" ? "pending" : "registered";
+  const { error } = await supabase.rpc("set_contract_ejari", { p_id: id, p_status: next });
+  if (error) { window.alert("Could not update Ejari status: " + error.message); return; }
+  if (!await reloadAfterWrite(reloadContracts, "Ejari status")) return;
+  render();
+}
+
+// ── dashboard helpers (birthdays, Ejari pending, daily) ──
+function birthdayAlerts() {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const out = [];
+  for (const s of state.staff) {
+    if (!s.birthday || !isoRe.test(s.birthday)) continue;
+    const [, mm, dd] = s.birthday.split("-").map(Number);
+    let next = new Date(today.getFullYear(), mm - 1, dd);
+    if (next < today) next = new Date(today.getFullYear() + 1, mm - 1, dd);
+    const days = Math.round((next - today) / 86400000);
+    if (days <= 30) out.push({ name: s.name, job: s.job, days, dateLabel: `${String(dd).padStart(2, "0")}-${MONTHS[mm - 1]}` });
+  }
+  return out.sort((a, b) => a.days - b.days);
+}
+function ejariPending() {
+  return state.contracts.filter((c) => c.status === "final" && c.ejari_status !== "registered");
+}
+function dailyControl() {
+  const today = todayIso();
+  const contractsToday = state.contracts.filter((c) => (c.created_at || "").slice(0, 10) === today || c.contract_date === today);
+  const receiptsToday = state.docs.filter((d) => d.doc_type === "receipt" && d.doc_date === today);
+  const invoicesToday = state.docs.filter((d) => d.doc_type === "invoice" && d.doc_date === today);
+  const contactsToday = state.contacts.filter((c) => (c.created_at || "").slice(0, 10) === today);
+  const cashToday = state.cashMovements.filter((m) => m.movement_date === today);
+  const receiptCash = receiptsToday.reduce((s, d) => s + (+d.amount || 0), 0)
+    + cashToday.filter((m) => m.direction === "in").reduce((s, m) => s + (+m.amount || 0), 0);
+  const activity = [];
+  contractsToday.forEach((c) => activity.push({ dept: "Sales", text: `Contract ${c.contract_no || "draft"} · ${c.tenant_name || ""}`.trim() }));
+  receiptsToday.forEach((d) => activity.push({ dept: "Accounts", text: `Receipt ${d.doc_no} · ${money(d.amount)}` }));
+  invoicesToday.forEach((d) => activity.push({ dept: "Accounts", text: `Invoice ${d.doc_no} · ${money(d.amount)}` }));
+  contactsToday.forEach((c) => activity.push({ dept: "CRM", text: `New contact · ${c.name}` }));
+  cashToday.forEach((m) => activity.push({ dept: "Accounts", text: `${m.direction === "in" ? "Cash in" : "Cash out"} · ${money(m.amount)}` }));
+  const deptCounts = {
+    Sales: contractsToday.length,
+    Accounts: receiptsToday.length + invoicesToday.length + cashToday.length,
+    CRM: contactsToday.length,
+  };
+  const maxDept = Math.max(1, ...Object.values(deptCounts));
+  return { contractsToday, receiptsToday, invoicesToday, contactsToday, receiptCash, activity: activity.slice(0, 10), deptCounts, maxDept };
+}
+function dashboardSearch(query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const out = [];
+  for (const c of state.contacts) {
+    if ([c.name, c.phone, c.email, c.contact_type].join(" ").toLowerCase().includes(q))
+      out.push({ screen: "contacts", label: `Contact · ${c.name}`, detail: `${c.contact_type} · ${c.phone || c.email || ""}`.trim() });
+  }
+  for (const c of state.contracts) {
+    if ([c.contract_no, c.tenant_name, c.landlord_name].join(" ").toLowerCase().includes(q))
+      out.push({ screen: "contracts", label: `Contract · ${c.contract_no || "draft"}`, detail: `${c.landlord_name || ""} → ${c.tenant_name || ""}` });
+  }
+  const seenDeal = new Set();
+  for (const d of state.deals) {
+    if (seenDeal.has(d.group_id)) continue;
+    if ([d.agent, d.building, d.unit, d.tenant, d.landlord].join(" ").toLowerCase().includes(q)) {
+      seenDeal.add(d.group_id);
+      out.push({ screen: "transactions", label: `Deal · ${d.unit || ""} ${d.building || ""}`.trim(), detail: `${d.agent} · ${d.tenant || d.landlord || ""}` });
+    }
+  }
+  return out.slice(0, 12);
+}
+
 // ── wiring ───────────────────────────────────────────────
 function wireScreen() {
   const retry = document.getElementById("retryload");
@@ -1706,6 +2124,45 @@ function wireScreen() {
   if (ce) ce.onclick = openCashForm;
   const cd = document.getElementById("cashdate");
   if (cd) cd.onchange = () => { state.cashDate = cd.value; render(); };
+  // contacts
+  const newContact = document.getElementById("newcontact"); if (newContact) newContact.onclick = () => { state.contactForm = emptyContactForm(); render(); };
+  root.querySelectorAll("[data-contacttype]").forEach((b) => b.onclick = () => { state.contactType = b.dataset.contacttype; render(); });
+  root.querySelectorAll("[data-editcontact]").forEach((b) => b.onclick = () => {
+    const c = state.contacts.find((x) => x.id === b.dataset.editcontact);
+    if (c) { state.contactForm = contactFormFromRow(c); render(); }
+  });
+  root.querySelectorAll("[data-deletecontact]").forEach((b) => b.onclick = () => deleteContact(b.dataset.deletecontact));
+  const contactq = document.getElementById("contactq");
+  if (contactq) contactq.oninput = () => {
+    state.contactQuery = contactq.value;
+    const main = root.querySelector("main"); main.innerHTML = viewContacts(); wireScreen();
+    const el = document.getElementById("contactq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
+  };
+  // cash & bank
+  const newCm = document.getElementById("newcm"); if (newCm) newCm.onclick = () => { state.cashMoveForm = emptyCashMoveForm(); render(); };
+  root.querySelectorAll("[data-cbmonth]").forEach((b) => b.onclick = () => { state.cbMonth = b.dataset.cbmonth; render(); });
+  root.querySelectorAll("[data-cbchannel]").forEach((b) => b.onclick = () => { state.cbChannel = b.dataset.cbchannel; render(); });
+  root.querySelectorAll("[data-editcm]").forEach((b) => b.onclick = () => {
+    const r = state.cashMovements.find((x) => x.id === b.dataset.editcm);
+    if (r) { state.cashMoveForm = cashMoveFormFromRow(r); render(); }
+  });
+  root.querySelectorAll("[data-deletecm]").forEach((b) => b.onclick = () => deleteCashMovement(b.dataset.deletecm));
+  const cbq = document.getElementById("cbq");
+  if (cbq) cbq.oninput = () => {
+    state.cbQuery = cbq.value;
+    const main = root.querySelector("main"); main.innerHTML = viewCashBank(); wireScreen();
+    const el = document.getElementById("cbq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
+  };
+  // contracts — Ejari toggle
+  root.querySelectorAll("[data-toggleejari]").forEach((b) => b.onclick = () => toggleEjari(b.dataset.toggleejari));
+  // dashboard — global search + deep links
+  const dashSearch = document.getElementById("dashsearch");
+  if (dashSearch) dashSearch.oninput = () => {
+    state.dashQuery = dashSearch.value;
+    const main = root.querySelector("main"); main.innerHTML = viewDashboard(); wireScreen();
+    const el = document.getElementById("dashsearch"); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  };
+  root.querySelectorAll("[data-gotoscreen]").forEach((b) => b.onclick = () => { state.dashQuery = ""; state.screen = b.dataset.gotoscreen; render(); });
   wireModals();
 }
 
@@ -1751,6 +2208,19 @@ function wireModals() {
     const deal = dealGroupOptions().find((option) => option.group === contractDeal.value)?.deal;
     state.contractForm = contractDraftFromDeal(deal); render();
   };
+  // contact modal
+  const contactClose2 = document.getElementById("contactclose2"); if (contactClose2) contactClose2.onclick = () => { state.contactForm = null; render(); };
+  const contactCancel2 = document.getElementById("contactcancel2"); if (contactCancel2) contactCancel2.onclick = () => { state.contactForm = null; render(); };
+  const contactSave2 = document.getElementById("contactsave2"); if (contactSave2) contactSave2.onclick = saveContactForm;
+  // cash movement modal
+  const cmClose = document.getElementById("cmclose"); if (cmClose) cmClose.onclick = () => { state.cashMoveForm = null; render(); };
+  const cmCancel = document.getElementById("cmcancel"); if (cmCancel) cmCancel.onclick = () => { state.cashMoveForm = null; render(); };
+  const cmSave = document.getElementById("cmsave"); if (cmSave) cmSave.onclick = saveCashMovement;
+  const cmChannel = document.getElementById("cm_channel");
+  if (cmChannel) cmChannel.onchange = () => {
+    if (state.cashMoveForm) state.cashMoveForm.channel = cmChannel.value;
+    const wrap = document.getElementById("cm_bankwrap"); if (wrap) wrap.style.display = cmChannel.value === "bank" ? "" : "none";
+  };
   const printClose = document.getElementById("printclose"); if (printClose) printClose.onclick = () => { state.printContract = null; render(); };
   const printNow = document.getElementById("printnow"); if (printNow) printNow.onclick = async () => {
     printNow.disabled = true; printNow.textContent = "Preparing pages…";
@@ -1769,6 +2239,8 @@ function wireModals() {
     if (state.printInvoice) { state.printInvoice = null; render(); }
     else if (state.printContract) { state.printContract = null; render(); }
     else if (state.contractForm) { state.contractForm = null; render(); }
+    else if (state.contactForm) { state.contactForm = null; render(); }
+    else if (state.cashMoveForm) { state.cashMoveForm = null; render(); }
   };
   if (state.contractForm) document.getElementById("ct_deal")?.focus();
   else if (state.printContract) document.getElementById("printclose")?.focus();
