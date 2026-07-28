@@ -103,10 +103,10 @@ async function loadData() {
     fetchAll("agents", "name"),
     fetchAll("deals", "sno"),
     fetchAll("commission_entries", "agent_name"),
-    roleIn("owner", "accounts") ? fetchAll("cash_position", "sort_order") : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin") ? fetchAll("cash_position", "sort_order") : Promise.resolve({ data: [] }),
     roleIn("owner") ? fetchAll("profiles", "created_at") : Promise.resolve({ data: [] }),
     roleIn("owner", "accounts", "admin") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
-    roleIn("owner", "admin") ? fetchAll("staff", "name") : Promise.resolve({ data: [] }),
+    roleIn("owner", "admin", "accounts") ? fetchAll("staff", "name") : Promise.resolve({ data: [] }),
     fetchAll("agent_requests", "created_at", false),
     fetchAll("contracts", "created_at", false),
     roleIn("owner", "accounts", "admin") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
@@ -313,13 +313,13 @@ function renderApp() {
   const nav = `
   <nav class="nav">
     <div class="nav-brand"><img src="./xsite-logo.png" alt="Xsite"></div>
-    ${roleIn("pending") ? "" : navLink("dashboard", "Dashboard")}
+    ${roleIn("owner", "accounts", "admin") ? navLink("dashboard", "Dashboard") : ""}
     ${showTx ? navLink("transactions", "Transactions") : ""}
-    ${roleIn("pending") ? "" : navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts")}
+    ${roleIn("owner", "accounts", "admin") ? navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts") : ""}
     ${roleIn("owner", "accounts", "admin") ? navLink("invoices", "Invoices & Receipts") : ""}
     ${showLedger ? navLink("ledgers", ledgerLabel) : ""}
     ${roleIn("pending") ? "" : navLink("requests", pendingRequests ? `Requests (${pendingRequests})` : "Requests")}
-    ${roleIn("owner", "admin") ? navLink("staff", "Staff") : ""}
+    ${roleIn("owner", "admin", "accounts") ? navLink("staff", "Staff") : ""}
     ${showTeam ? navLink("team", pendingTeam ? `Team (${pendingTeam})` : "Team") : ""}
     <div class="nav-right">
       <span class="tag tag-neutral">${esc(p.role)}</span>
@@ -332,12 +332,13 @@ function renderApp() {
   if (state.fatalError) body = viewFatalError();
   else if (roleIn("pending")) body = viewPending();
   else if (state.screen === "transactions" && showTx) body = viewTransactions();
-  else if (state.screen === "contracts") body = viewContracts();
+  else if (state.screen === "contracts" && roleIn("owner", "accounts", "admin")) body = viewContracts();
   else if (state.screen === "invoices" && roleIn("owner", "accounts", "admin")) body = viewInvoices();
   else if (state.screen === "ledgers" && showLedger) body = viewLedgers();
   else if (state.screen === "requests") body = viewRequests();
-  else if (state.screen === "staff" && roleIn("owner", "admin")) body = viewStaff();
+  else if (state.screen === "staff" && roleIn("owner", "admin", "accounts")) body = viewStaff();
   else if (state.screen === "team" && showTeam) body = viewTeam();
+  else if (roleIn("agent")) body = viewLedgers();
   else body = viewDashboard();
   root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
@@ -797,12 +798,12 @@ function viewDashboard() {
   const isLatestCash = state.cashDate === cashDates[0];
   const cashDateOpts = cashDates.map((d) =>
     `<option value="${d}" ${d === state.cashDate ? "selected" : ""}>${showDate(d)}${d === cashDates[0] ? " (latest)" : ""}</option>`).join("");
-  const cashCard = roleIn("owner", "accounts") ? `
+  const cashCard = roleIn("owner", "accounts", "admin") ? `
     <section class="md-section">
       <div class="md-section-header"><h3>Cash position</h3>
         <span style="display:flex;gap:8px;align-items:center">
           ${cashDates.length > 1 ? `<select class="input" id="cashdate" style="padding:5px 8px;font-size:12px;width:auto">${cashDateOpts}</select>` : `<span class="text-muted" style="font-size:11px">As at ${showDate(state.cashDate)}</span>`}
-          <button class="btn btn-secondary btn-mini" id="cashedit">Update cash</button>
+          ${roleIn("owner", "accounts") ? `<button class="btn btn-secondary btn-mini" id="cashedit">Update cash</button>` : ""}
         </span>
       </div>
       ${!isLatestCash ? `<p class="text-muted" style="font-size:11px;margin:0 0 8px">Historical snapshot — latest is ${showDate(cashDates[0])}.</p>` : ""}
