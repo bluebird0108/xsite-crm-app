@@ -1483,7 +1483,11 @@ function viewInvoicePrint() {
       <div class="inv-foot">
         <div class="inv-due"><strong>Due Date:</strong> ${inp("due_date", f.due_date, 'type="date" style="width:auto;display:inline-block"')}</div>
         <div class="inv-bank">${XSITE_CO.bank.map(([k, v]) => `<div>${esc(k)} - ${esc(v)}</div>`).join("")}</div>
-        <div class="inv-sign"><span class="text-muted">Authorised signature &amp; stamp</span></div>
+        <div class="inv-sign">
+          <img class="inv-sign-img" src="./contract-assets/invoice-signature.png" alt="Authorised signature">
+          <img class="inv-stamp-img" src="./contract-assets/invoice-stamp.png" alt="Company stamp">
+          <div class="inv-sign-label">Authorised signatory · Xsite Real Estate Brokers L.L.C</div>
+        </div>
       </div>
       <div class="inv-registered">${esc(XSITE_CO.registered)}</div>
     </div>

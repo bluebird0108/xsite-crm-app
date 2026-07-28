@@ -313,7 +313,10 @@ table.grid.wide { min-width: 1700px; }
 .inv-foot { margin-top: 20px; }
 .inv-due { margin-bottom: 10px; }
 .inv-bank div { line-height: 1.5; }
-.inv-sign { margin-top: 40px; }
+.inv-sign { margin-top: 30px; position: relative; height: 130px; }
+.inv-sign-img { position: absolute; top: 6px; left: 10px; width: 150px; height: auto; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+.inv-stamp-img { position: absolute; top: 0; left: 120px; width: 120px; height: auto; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+.inv-sign-label { position: absolute; top: 116px; left: 10px; font-size: 10px; color: #666; }
 .inv-registered { margin-top: 40px; padding-top: 8px; border-top: 1px solid #ddd; font-size: 10px; color: #666; }
 @media (max-width: 720px) { .inv-meta { grid-template-columns: 1fr; } .inv-print-shell { padding: 8px; } }
 @media print {
