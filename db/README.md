@@ -1,4 +1,10 @@
-# Supabase migrations
+# Database migrations
+
+> Kept under `db/`, **not** `supabase/`, on purpose. The database already has
+> its full migration history applied directly in the project; putting a
+> partial `supabase/migrations/` folder in the repo makes the Supabase↔GitHub
+> integration try to reconcile it against that history and fail its Preview
+> check. This folder is documentation/record only.
 
 ## `20260728200403_feature_merge_contacts_ejari_cashbank.sql`
 
@@ -27,6 +33,6 @@ apply the migration one of these ways:
 - **Supabase SQL editor** — paste the file contents and run.
 - **Supabase MCP** — `apply_migration` with this file (needs the approval
   that was unavailable in the session that authored it).
-- **Supabase CLI** — `supabase db push` with this file under `supabase/migrations/`.
+- **Supabase CLI** — copy this file into a `supabase/migrations/` folder and run `supabase db push`.
 
 Project ref: `eesbkovplyyxxdzkhvko`.
