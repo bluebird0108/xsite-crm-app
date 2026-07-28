@@ -52,6 +52,6 @@ port over the features that were unique to the standalone build.
    with click-through deep links.
 
 The backend objects these need are in
-`supabase/migrations/20260728200403_feature_merge_contacts_ejari_cashbank.sql`
-(see `supabase/README.md`). Until it is applied, the new sections simply stay
+`db/migrations/20260728200403_feature_merge_contacts_ejari_cashbank.sql`
+(see `db/README.md`). Until it is applied, the new sections simply stay
 empty — the rest of the app is unaffected.
