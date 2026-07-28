@@ -307,3 +307,46 @@ table.grid.wide { min-width: 1700px; }
   .table-wrap { overflow: visible; }
   .grid { font-size: 9px; }
 }
+
+/* ── Tax invoice draft + print ────────────────────────────── */
+.inv-print-shell { position: fixed; inset: 0; z-index: 100; overflow: auto; padding: 24px; background: #292929; }
+.inv-toolbar { position: sticky; top: 0; z-index: 4; width: min(210mm,100%); margin: 0 auto 16px; }
+.inv-sheet { position: relative; width: min(210mm,100%); min-height: 297mm; margin: 0 auto; padding: 16mm 14mm; background: #fff; color: #1a1a1a; box-shadow: 0 12px 32px rgba(0,0,0,.35); font-size: 12px; line-height: 1.4; }
+.inv-watermark { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 120px; font-weight: 800; color: rgba(236,48,19,.06); letter-spacing: .1em; pointer-events: none; }
+.inv-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }
+.inv-title { margin: 0; font-size: 34px; letter-spacing: -.01em; }
+.inv-logo { width: 92px; height: auto; filter: invert(1); print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+.inv-meta { display: grid; grid-template-columns: 1.1fr .9fr 1fr; gap: 18px; margin-bottom: 26px; }
+.inv-lbl { display: block; font-weight: 700; font-size: 11px; margin: 6px 0 2px; }
+.inv-company strong { display: block; margin-bottom: 2px; }
+.inv-company div { color: #333; }
+.inv-in { width: 100%; border: 1px dashed #cfcfcf; background: #fbfbfb; font: inherit; color: inherit; padding: 2px 4px; }
+.inv-in:focus { outline: 2px solid var(--color-accent); background: #fff; }
+.inv-ta { resize: vertical; }
+.inv-items { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+.inv-items th { text-align: left; border-bottom: 1.5px solid #1a1a1a; padding: 6px 4px; font-size: 11px; }
+.inv-items th.num, .inv-items td.num { text-align: right; }
+.inv-items td { padding: 8px 4px; vertical-align: top; border-bottom: 1px solid #e5e5e5; }
+.inv-buyer { margin-top: 4px; color: #333; }
+.inv-totals { width: 300px; margin-left: auto; margin-bottom: 40px; }
+.inv-total-row { display: flex; justify-content: space-between; gap: 12px; padding: 5px 4px; }
+.inv-total-row.is-grand { border-top: 1.5px solid #1a1a1a; font-weight: 800; font-size: 14px; }
+.inv-foot { margin-top: 20px; }
+.inv-due { margin-bottom: 10px; }
+.inv-bank div { line-height: 1.5; }
+.inv-sign { margin-top: 30px; position: relative; height: 130px; }
+.inv-sign-img { position: absolute; top: 6px; left: 10px; width: 150px; height: auto; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+.inv-stamp-img { position: absolute; top: 0; left: 120px; width: 120px; height: auto; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+.inv-sign-label { position: absolute; top: 116px; left: 10px; font-size: 10px; color: #666; }
+.inv-registered { margin-top: 40px; padding-top: 8px; border-top: 1px solid #ddd; font-size: 10px; color: #666; }
+@media (max-width: 720px) { .inv-meta { grid-template-columns: 1fr; } .inv-print-shell { padding: 8px; } }
+@media print {
+  body:has(.inv-print-shell) * { visibility: hidden !important; }
+  body:has(.inv-print-shell) .inv-print-shell,
+  body:has(.inv-print-shell) .inv-print-shell * { visibility: visible !important; }
+  body:has(.inv-print-shell) .inv-toolbar { display: none !important; }
+  body:has(.inv-print-shell) .inv-print-shell { position: absolute; inset: 0; overflow: visible; padding: 0; background: #fff; }
+  body:has(.inv-print-shell) .inv-sheet { width: 210mm; min-height: 297mm; margin: 0; box-shadow: none; }
+  body:has(.inv-print-shell) .inv-in { border: none !important; background: transparent !important; padding: 0 !important; }
+  body:has(.inv-print-shell) .inv-watermark { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+}
