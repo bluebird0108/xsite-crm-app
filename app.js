@@ -22,7 +22,7 @@ const state = {
   agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [], requests: [], contracts: [], accountTasks: [],
   contacts: [], cashMovements: [],
   selectedAgent: null,
-  txQuery: "", txType: "All", ledgerQuery: "", nameQuery: "",
+  txQuery: "", txType: "All", ledgerQuery: "",
   txMonth: null, ledgerMonth: null,
   invMonth: null, invType: "All", invQuery: "",
   cashDate: null,
@@ -387,7 +387,6 @@ function renderApp() {
     ${roleIn("owner", "accounts", "admin") ? navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts") : ""}
     ${roleIn("owner", "accounts", "admin") ? navLink("invoices", "Invoices & Receipts") : ""}
     ${roleIn("owner", "accounts") ? navLink("cashbank", "Cash & Bank") : ""}
-    ${roleIn("pending") ? "" : navLink("names", "Names")}
     ${roleIn("pending") ? "" : navLink("requests", pendingRequests ? `Requests (${pendingRequests})` : "Requests")}
     ${roleIn("owner", "admin", "accounts") ? navLink("staff", "Staff") : ""}
     ${showTeam ? navLink("team", pendingTeam ? `Team (${pendingTeam})` : "Team") : ""}
@@ -406,11 +405,10 @@ function renderApp() {
   else if (state.screen === "contracts" && roleIn("owner", "accounts", "admin")) body = viewContracts();
   else if (state.screen === "invoices" && roleIn("owner", "accounts", "admin")) body = viewInvoices();
   else if (state.screen === "cashbank" && roleIn("owner", "accounts")) body = viewCashBank();
-  else if (state.screen === "names") body = viewNames();
   else if (state.screen === "requests") body = viewRequests();
   else if (state.screen === "staff" && roleIn("owner", "admin", "accounts")) body = viewStaff();
   else if (state.screen === "team" && showTeam) body = viewTeam();
-  else if (roleIn("agent")) body = viewNames();
+  else if (roleIn("agent")) body = viewRequests();
   else body = viewDashboard();
   root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewContactModal() + viewCashMoveModal();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
@@ -2042,26 +2040,6 @@ function dashboardSearch(query) {
   return out.slice(0, 12);
 }
 
-// ── view: names (simple staff + agent roster) ───────────
-function rosterNames() {
-  const set = new Set();
-  state.staff.forEach((s) => { if (s.name) set.add(String(s.name).trim()); });
-  state.agents.forEach((a) => { if (a.name) set.add(String(a.name).trim()); });
-  state.commission.forEach((c) => { if (c.agent_name) set.add(String(c.agent_name).trim()); });
-  return [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
-}
-function viewNames() {
-  const names = rosterNames();
-  const q = state.nameQuery.trim().toLowerCase();
-  const filtered = names.filter((n) => !q || n.toLowerCase().includes(q));
-  const items = filtered.map((n) => `<div class="name-item">${esc(n)}</div>`).join("");
-  return `<div>
-    <div style="margin-bottom:20px"><span class="card-kicker">Directory</span><h1 style="margin-top:4px">Names</h1><p class="text-muted" style="margin:0">${names.length} staff and agent names.</p></div>
-    <div class="tx-toolbar"><input class="input" id="nameq" type="search" placeholder="Search names…" value="${esc(state.nameQuery)}"><span class="text-muted" style="font-size:12px">${filtered.length} shown</span></div>
-    <div class="name-grid">${items || `<div class="md-empty" style="border:0">No names.</div>`}</div>
-  </div>`;
-}
-
 // ── wiring ───────────────────────────────────────────────
 function wireScreen() {
   const retry = document.getElementById("retryload");
@@ -2175,13 +2153,6 @@ function wireScreen() {
   };
   // contracts — Ejari toggle
   root.querySelectorAll("[data-toggleejari]").forEach((b) => b.onclick = () => toggleEjari(b.dataset.toggleejari));
-  // names roster
-  const nameq = document.getElementById("nameq");
-  if (nameq) nameq.oninput = () => {
-    state.nameQuery = nameq.value;
-    const main = root.querySelector("main"); main.innerHTML = viewNames(); wireScreen();
-    const el = document.getElementById("nameq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
-  };
   // dashboard — global search + deep links
   const dashSearch = document.getElementById("dashsearch");
   if (dashSearch) dashSearch.oninput = () => {
