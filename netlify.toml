@@ -1,0 +1,17 @@
+# Netlify configuration for the Xsite CRM static site.
+# It's a plain static app (index.html + JS/CSS at the repo root) — no build step.
+[build]
+  publish = "."
+  command = ""
+
+# Static assets can be cached hard; HTML should always revalidate so new
+# deploys show up immediately.
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
