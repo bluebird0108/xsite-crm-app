@@ -1413,6 +1413,7 @@ function invoiceDraftFor(doc) {
     quantity: d.quantity != null ? d.quantity : 1,
     unit_price: d.unit_price != null ? d.unit_price : (doc.amount ?? 0),
     vat_rate: d.vat_rate != null ? d.vat_rate : 5,
+    signed: d.signed != null ? d.signed : true,
   };
 }
 function openInvoicePrint(id) {
@@ -1433,7 +1434,8 @@ function viewInvoicePrint() {
   return `<div class="inv-print-shell" role="dialog" aria-modal="true" aria-label="Invoice preview" tabindex="-1">
     <div class="contract-print-toolbar inv-toolbar">
       <div><strong>Tax Invoice</strong><div>${esc(f.invoice_number)}${f.status !== "paid" ? " · DRAFT" : ""}</div></div>
-      <div>
+      <div style="display:flex;align-items:center;gap:12px">
+        ${canEdit ? `<label style="display:flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap"><input type="checkbox" id="invsigned" ${f.signed ? "checked" : ""}>Signature &amp; stamp</label>` : ""}
         <button class="btn btn-secondary" id="invclose">Back</button>
         ${canEdit ? `<button class="btn btn-secondary" id="invsave">Save draft</button>` : ""}
         <button class="btn btn-primary" id="invprint">Print / Save PDF</button>
@@ -1484,8 +1486,8 @@ function viewInvoicePrint() {
         <div class="inv-due"><strong>Due Date:</strong> ${inp("due_date", f.due_date, 'type="date" style="width:auto;display:inline-block"')}</div>
         <div class="inv-bank">${XSITE_CO.bank.map(([k, v]) => `<div>${esc(k)} - ${esc(v)}</div>`).join("")}</div>
         <div class="inv-sign">
-          <img class="inv-sign-img" src="./contract-assets/invoice-signature.png" alt="Authorised signature">
-          <img class="inv-stamp-img" src="./contract-assets/invoice-stamp.png" alt="Company stamp">
+          ${f.signed ? `<img class="inv-sign-img" src="./contract-assets/invoice-signature.png" alt="Authorised signature">
+          <img class="inv-stamp-img" src="./contract-assets/invoice-stamp.png" alt="Company stamp">` : ""}
           <div class="inv-sign-label">Authorised signatory · Xsite Real Estate Brokers L.L.C</div>
         </div>
       </div>
@@ -1512,6 +1514,7 @@ function readInvoiceForm() {
    "reference", "agent", "buyer_name", "description", "quantity", "unit_price", "vat_rate"].forEach((k) => {
     if (g(k)) f[k] = g(k).value;
   });
+  const cb = document.getElementById("invsigned"); if (cb) f.signed = cb.checked;
 }
 async function saveInvoiceDraft() {
   readInvoiceForm();
@@ -1522,6 +1525,7 @@ async function saveInvoiceDraft() {
     client_name: f.client_name, client_address: f.client_address, client_trn: f.client_trn,
     reference: f.reference, agent: f.agent, buyer_name: f.buyer_name, description: f.description,
     quantity: Number(f.quantity) || 0, unit_price: Number(f.unit_price) || 0, vat_rate: Number(f.vat_rate) || 0,
+    signed: !!f.signed,
   };
   const amount = details.quantity * details.unit_price;
   const { error } = await supabase.from("money_docs").update({ details, amount, client: f.client_name, doc_date: f.invoice_date }).eq("id", f.id);
@@ -1671,6 +1675,8 @@ function wireScreen() {
     document.getElementById("invclose").onclick = () => { state.printInvoice = null; render(); };
     const invSave = document.getElementById("invsave"); if (invSave) invSave.onclick = saveInvoiceDraft;
     document.getElementById("invprint").onclick = () => window.print();
+    const invSigned = document.getElementById("invsigned");
+    if (invSigned) invSigned.onchange = () => { readInvoiceForm(); state.printInvoice.signed = invSigned.checked; render(); };
     ["quantity", "unit_price", "vat_rate"].forEach((id) => {
       const el = document.getElementById("iv_" + id); if (el) el.oninput = invoiceRecalc;
     });
