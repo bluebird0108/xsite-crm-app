@@ -20,7 +20,7 @@ const state = {
   screen: "dashboard",
   authMode: "signin",
   agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [], requests: [], contracts: [], accountTasks: [],
-  contacts: [], cashMovements: [],
+  contacts: [], cashMovements: [], contractFiles: [],
   selectedAgent: null,
   txQuery: "", txType: "All", ledgerQuery: "",
   txMonth: null, ledgerMonth: null,
@@ -32,7 +32,7 @@ const state = {
   dashQuery: "", activityDay: null,
   dealForm: null, pwForm: false, docForm: null, cashForm: null, requestForm: null,
   contractForm: null, printContract: null, printInvoice: null,
-  contactForm: null, cashMoveForm: null,
+  contactForm: null, cashMoveForm: null, filesFor: null,
 };
 
 // ── helpers ──────────────────────────────────────────────
@@ -79,7 +79,7 @@ function clearSensitiveState() {
   state.agents = []; state.deals = []; state.commission = []; state.cash = [];
   state.team = []; state.docs = []; state.staff = []; state.requests = [];
   state.contracts = []; state.accountTasks = [];
-  state.contacts = []; state.cashMovements = [];
+  state.contacts = []; state.cashMovements = []; state.contractFiles = [];
   state.dealForm = null; state.pwForm = false; state.docForm = null;
   state.cashForm = null; state.requestForm = null; state.contractForm = null; state.printContract = null;
   state.contactForm = null; state.cashMoveForm = null;
@@ -96,6 +96,7 @@ const COLUMNS = {
   contracts: "id,contract_no,deal_group,status,contract_date,start_date,end_date,landlord_name,tenant_name,owner_phone,tenant_phone,annual_rent,security_deposit,payment_mode,additional_terms,details,addendum,ejari_status,created_by,finalized_by,finalized_at,created_at,updated_at",
   account_tasks: "id,contract_id,task_type,status,money_doc_id,completed_by,completed_at,created_at",
   contacts: "id,name,contact_type,phone,email,notes,last_contact,birthday,created_by,created_at,updated_at",
+  contract_files: "id,contract_id,doc_type,file_name,storage_path,size_bytes,uploaded_by_name,created_at",
   cash_movements: "id,movement_date,direction,channel,bank_account,agent_name,client,property,amount,reference,month,created_by,created_at",
 };
 async function fetchAll(table, orderColumn, ascending = true, columns = COLUMNS[table]) {
@@ -146,10 +147,10 @@ async function loadData() {
     state.agents = []; state.deals = []; state.commission = []; state.cash = [];
     state.team = []; state.docs = []; state.staff = []; state.requests = [];
     state.contracts = []; state.accountTasks = [];
-    state.contacts = []; state.cashMovements = [];
+    state.contacts = []; state.cashMovements = []; state.contractFiles = [];
     return;
   }
-  const [ag, dl, cm, ch, tm, md, sf, rq, ct, at, co, mv] = await Promise.all([
+  const [ag, dl, cm, ch, tm, md, sf, rq, ct, at, co, mv, cf] = await Promise.all([
     fetchAll("agents", "name"),
     fetchAll("deals", "sno"),
     fetchAll("commission_entries", "agent_name"),
@@ -162,6 +163,7 @@ async function loadData() {
     roleIn("owner", "accounts", "admin") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
     roleIn("owner", "accounts", "admin") ? fetchAllSafe("contacts", "name", true, true) : Promise.resolve({ data: [] }),
     roleIn("owner", "accounts", "admin") ? fetchAllSafe("cash_movements", "movement_date", false) : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin") ? fetchAllSafe("contract_files", "created_at", false) : Promise.resolve({ data: [] }),
   ]);
   state.agents = requireData(ag, "Could not load agents");
   state.deals = requireData(dl, "Could not load deals");
@@ -175,6 +177,7 @@ async function loadData() {
   state.accountTasks = requireData(at, "Could not load Accounts tasks");
   state.contacts = requireData(co, "Could not load contacts");
   state.cashMovements = requireData(mv, "Could not load cash and bank movements");
+  state.contractFiles = requireData(cf, "Could not load documents");
   const cbmonths = availableMonths(state.cashMovements, "month");
   if (!state.cbMonth || !cbmonths.includes(state.cbMonth)) state.cbMonth = cbmonths[0] || null;
   const months = availableMonths(state.deals, "month");
@@ -411,7 +414,7 @@ function renderApp() {
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else if (roleIn("agent")) body = viewLedgers();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewContactModal() + viewCashMoveModal();
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
@@ -723,7 +726,7 @@ function viewContracts() {
       <td><span class="tag ${contract.status === "draft" ? "tag-accent" : "tag-neutral"}">${esc(contract.status)}</span></td>
       <td>${ejariCell}</td>
       <td><span class="${renewal.status === "expired" ? "expiry-days is-overdue" : renewal.status === "due" ? "expiry-days" : "text-muted"}">${esc(renewalText)}</span></td>
-      <td style="white-space:nowrap">${canManage && contract.status === "draft" ? `<button class="btn btn-secondary btn-mini" data-editcontract="${contract.id}">Edit</button> ` : ""}<button class="btn btn-primary btn-mini" data-printcontract="${contract.id}">View / print</button></td></tr>`;
+      <td style="white-space:nowrap">${canManage && contract.status === "draft" ? `<button class="btn btn-secondary btn-mini" data-editcontract="${contract.id}">Edit</button> ` : ""}<button class="btn btn-secondary btn-mini" data-files="${contract.id}">Files${fileCount(contract.id) ? ` (${fileCount(contract.id)})` : ""}</button> <button class="btn btn-primary btn-mini" data-printcontract="${contract.id}">View / print</button></td></tr>`;
   }).join("");
   return `<div>
     <div style="margin-bottom:20px;display:flex;justify-content:space-between;gap:16px;align-items:end;flex-wrap:wrap">
@@ -2182,6 +2185,110 @@ function viewTeamActivity() {
   </div>`;
 }
 
+// ── contract documents (signed contracts, cheques, IDs) ──
+const DOC_TYPES = [
+  ["signed_contract", "Signed contract / Ejari"],
+  ["cheque", "Cheque copy"],
+  ["owner_docs", "Owner documents (ID / passport / title deed)"],
+  ["tenant_docs", "Tenant documents (ID / passport / visa)"],
+  ["other", "Other"],
+];
+const docTypeLabel = (t) => (DOC_TYPES.find(([k]) => k === t) || [null, t])[1];
+const fileCount = (contractId) => state.contractFiles.filter((f) => f.contract_id === contractId).length;
+const fileSize = (bytes) => {
+  if (!bytes && bytes !== 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+};
+
+async function reloadContractFiles() {
+  const result = await fetchAllSafe("contract_files", "created_at", false);
+  state.contractFiles = requireData(result, "Could not reload documents");
+}
+
+function viewFilesModal() {
+  const f = state.filesFor;
+  if (!f) return "";
+  const contract = state.contracts.find((c) => c.id === f.contractId);
+  if (!contract) return "";
+  const canUpload = roleIn("owner", "admin", "accounts");
+  const canDelete = roleIn("owner", "admin");
+  const rows = state.contractFiles.filter((x) => x.contract_id === f.contractId)
+    .map((x) => `<tr>
+      <td>${esc(docTypeLabel(x.doc_type))}</td>
+      <td>${esc(x.file_name)}</td>
+      <td>${esc(fileSize(x.size_bytes))}</td>
+      <td>${esc(x.uploaded_by_name || "—")}</td>
+      <td>${esc(showDate((x.created_at || "").slice(0, 10)))}</td>
+      <td style="white-space:nowrap"><button class="btn btn-secondary btn-mini" data-openfile="${x.id}">Open</button>${canDelete ? ` <button class="btn btn-secondary btn-mini" data-delfile="${x.id}">Delete</button>` : ""}</td>
+    </tr>`).join("");
+  return `<div class="modal-backdrop">
+    <div class="modal" style="width:min(860px,100%)" role="dialog" aria-labelledby="filestitle">
+      <div class="modal-head"><h3 id="filestitle">Documents — ${esc(contract.contract_no || "contract")}</h3><button class="modal-close" id="filesclose" aria-label="Close">×</button></div>
+      <div class="modal-body">
+        <p class="text-muted" style="font-size:12px;margin-top:0">${esc(contract.landlord_name || "")} → ${esc(contract.tenant_name || "")} · stored securely, visible to Owner, Admin, and Accounts.</p>
+        ${canUpload ? `<div class="form-grid" style="grid-template-columns:1fr 1fr auto;align-items:end;gap:10px">
+          <div class="field"><label for="fu_type">Document type</label><select class="input" id="fu_type">${DOC_TYPES.map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select></div>
+          <div class="field"><label for="fu_file">Choose file (max 25 MB)</label><input class="input" id="fu_file" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.doc,.docx"></div>
+          <button class="btn btn-primary" id="fu_upload">Upload</button>
+        </div>` : ""}
+        <p class="form-msg" id="filesmsg" aria-live="polite">${esc(f.msg || "")}</p>
+        <div class="table-wrap" style="margin-top:8px"><table class="grid">
+          <thead><tr><th>Type</th><th>File</th><th>Size</th><th>Uploaded by</th><th>Date</th><th></th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="6"><div class="md-empty" style="border:0">No documents uploaded yet.</div></td></tr>`}</tbody>
+        </table></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function uploadContractFile() {
+  const input = document.getElementById("fu_file");
+  const msg = document.getElementById("filesmsg");
+  const file = input?.files?.[0];
+  if (!file) { msg.textContent = "Choose a file first."; return; }
+  if (file.size > 25 * 1024 * 1024) { msg.textContent = "File is larger than 25 MB."; return; }
+  const btn = document.getElementById("fu_upload"); btn.disabled = true; btn.textContent = "Uploading…";
+  const contractId = state.filesFor.contractId;
+  const docType = document.getElementById("fu_type").value;
+  const safeName = file.name.replace(/[^\w.\- ]+/g, "_").slice(-120);
+  const path = `${contractId}/${crypto.randomUUID()}-${safeName}`;
+  const up = await supabase.storage.from("documents").upload(path, file, { upsert: false, contentType: file.type || undefined });
+  if (up.error) { msg.textContent = "Upload failed: " + up.error.message; btn.disabled = false; btn.textContent = "Upload"; return; }
+  const ins = await supabase.from("contract_files").insert({
+    contract_id: contractId, doc_type: docType, file_name: file.name,
+    storage_path: path, size_bytes: file.size,
+    uploaded_by_name: state.profile.full_name || state.profile.email,
+  });
+  if (ins.error) {
+    await supabase.storage.from("documents").remove([path]);
+    msg.textContent = "Could not save: " + ins.error.message;
+    btn.disabled = false; btn.textContent = "Upload"; return;
+  }
+  if (!await reloadAfterWrite(reloadContractFiles, "Document")) return;
+  state.filesFor.msg = `Uploaded ${file.name}.`;
+  render();
+}
+
+async function openContractFile(id) {
+  const row = state.contractFiles.find((x) => x.id === id);
+  if (!row) return;
+  const signed = await supabase.storage.from("documents").createSignedUrl(row.storage_path, 120);
+  if (signed.error) { window.alert("Could not open file: " + signed.error.message); return; }
+  window.open(signed.data.signedUrl, "_blank", "noopener");
+}
+
+async function deleteContractFile(id) {
+  const row = state.contractFiles.find((x) => x.id === id);
+  if (!row || !window.confirm(`Delete ${row.file_name}? This cannot be undone.`)) return;
+  const del = await supabase.from("contract_files").delete().eq("id", id);
+  if (del.error) { window.alert("Could not delete: " + del.error.message); return; }
+  await supabase.storage.from("documents").remove([row.storage_path]);
+  if (!await reloadAfterWrite(reloadContractFiles, "Document deletion")) return;
+  render();
+}
+
 // ── wiring ───────────────────────────────────────────────
 function wireScreen() {
   const retry = document.getElementById("retryload");
@@ -2295,6 +2402,10 @@ function wireScreen() {
   };
   // contracts — Ejari toggle
   root.querySelectorAll("[data-toggleejari]").forEach((b) => b.onclick = () => toggleEjari(b.dataset.toggleejari));
+  // contract documents
+  root.querySelectorAll("[data-files]").forEach((b) => b.onclick = () => { state.filesFor = { contractId: b.dataset.files, msg: "" }; render(); });
+  root.querySelectorAll("[data-openfile]").forEach((b) => b.onclick = () => openContractFile(b.dataset.openfile));
+  root.querySelectorAll("[data-delfile]").forEach((b) => b.onclick = () => deleteContractFile(b.dataset.delfile));
   // team activity — day selector
   const activityDay = document.getElementById("activityday");
   if (activityDay) activityDay.onchange = () => { state.activityDay = activityDay.value; render(); };
@@ -2364,6 +2475,9 @@ function wireModals() {
     if (state.cashMoveForm) state.cashMoveForm.channel = cmChannel.value;
     const wrap = document.getElementById("cm_bankwrap"); if (wrap) wrap.style.display = cmChannel.value === "bank" ? "" : "none";
   };
+  // contract documents modal
+  const filesClose = document.getElementById("filesclose"); if (filesClose) filesClose.onclick = () => { state.filesFor = null; render(); };
+  const fileUpload = document.getElementById("fu_upload"); if (fileUpload) fileUpload.onclick = uploadContractFile;
   const printClose = document.getElementById("printclose"); if (printClose) printClose.onclick = () => { state.printContract = null; render(); };
   const printNow = document.getElementById("printnow"); if (printNow) printNow.onclick = async () => {
     printNow.disabled = true; printNow.textContent = "Preparing pages…";
@@ -2382,6 +2496,7 @@ function wireModals() {
     if (state.printInvoice) { state.printInvoice = null; render(); }
     else if (state.printContract) { state.printContract = null; render(); }
     else if (state.contractForm) { state.contractForm = null; render(); }
+    else if (state.filesFor) { state.filesFor = null; render(); }
     else if (state.contactForm) { state.contactForm = null; render(); }
     else if (state.cashMoveForm) { state.cashMoveForm = null; render(); }
   };
