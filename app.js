@@ -31,7 +31,7 @@ const state = {
   cbMonth: null, cbChannel: "All", cbQuery: "",
   dashQuery: "", activityDay: null,
   dealForm: null, pwForm: false, docForm: null, cashForm: null, requestForm: null,
-  contractForm: null, printContract: null, printInvoice: null, printReceipt: null,
+  contractForm: null, printContract: null, printInvoice: null, printReceipt: null, printLedger: false,
   contactForm: null, cashMoveForm: null, filesFor: null, subForm: null, subView: null, staffForm: null, ejariHelp: null,
 };
 
@@ -83,7 +83,7 @@ function clearSensitiveState() {
   state.dealForm = null; state.pwForm = false; state.docForm = null;
   state.cashForm = null; state.requestForm = null; state.contractForm = null; state.printContract = null;
   state.contactForm = null; state.cashMoveForm = null;
-  state.printInvoice = null; state.printReceipt = null; state.filesFor = null; state.subForm = null;
+  state.printInvoice = null; state.printReceipt = null; state.printLedger = false; state.filesFor = null; state.subForm = null;
   state.staffForm = null; state.ejariHelp = null;
   state.subView = null; state.ceForm = null;
 }
@@ -454,7 +454,7 @@ function renderApp() {
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else if (roleIn("agent")) body = viewLedgers();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewReceiptPrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail() + viewCeModal() + viewStaffModal() + viewEjariHelp();
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewReceiptPrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail() + viewCeModal() + viewStaffModal() + viewEjariHelp() + viewLedgerStatement();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
@@ -2036,11 +2036,24 @@ async function saveReceiptDraft() {
 // Every name the business knows about — staff roster, imported agents, and
 // anyone with commission history. A staff member with no deals yet still shows
 // up (with a zero ledger) so they can be linked to a login straight away.
+const normName = (s) => String(s || "").trim().replace(/\s+/g, " ").toUpperCase();
+const sameAgent = (a, b) => normName(a) === normName(b);
 function allLedgerNames() {
-  const names = new Set();
-  state.commission.forEach((r) => { if (r.agent_name) names.add(String(r.agent_name).trim().toUpperCase()); });
-  state.agents.forEach((a) => { if (a.name) names.add(String(a.name).trim().toUpperCase()); });
-  state.staff.forEach((x) => { if (x.name) names.add(String(x.name).trim().toUpperCase()); });
+  // Authoritative full names come from commission entries + the staff roster.
+  const auth = new Set();
+  state.commission.forEach((r) => { if (r.agent_name) auth.add(normName(r.agent_name)); });
+  state.staff.forEach((x) => { if (x.name) auth.add(normName(x.name)); });
+  const authArr = [...auth];
+  const names = new Set(auth);
+  // Legacy short agent-table names shadow the fuller staff name (e.g. "WAJAHAT ISRAR"
+  // vs "WAJAHAT ISRAR HAJI MUHAMMAD ISRAR"). Drop a short variant when a fuller name exists.
+  state.agents.forEach((a) => {
+    if (!a.name) return;
+    const n = normName(a.name);
+    if (auth.has(n)) return;
+    const shadowed = authArr.some((f) => f.startsWith(n + " "));
+    if (!shadowed) names.add(n);
+  });
   return [...names].filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
 function ledgerAgentNames() {
@@ -2061,8 +2074,24 @@ function viewLedgers() {
   const lmonths = availableMonths(state.commission, "month");
   const lmonthTabs = lmonths.map((m) =>
     `<button class="tab ${state.ledgerMonth === m ? "is-active" : ""}" data-ledgermonth="${m}">${monthLabel(m)}</button>`).join("");
-  const rows = state.commission.filter((r) => r.agent_name === state.selectedAgent && (!state.ledgerMonth || r.month === state.ledgerMonth));
+  const rows = state.commission.filter((r) => sameAgent(r.agent_name, state.selectedAgent) && (!state.ledgerMonth || r.month === state.ledgerMonth));
   const sum = (k) => rows.reduce((s, r) => s + (+r[k] || 0), 0);
+  // Team roll-up — clicking a team tab (e.g. Arjan) shows that whole team's combined figures.
+  const teamActive = !isAgent && state.ledgerTeam !== "All" && teams.includes(state.ledgerTeam);
+  const teamBand = teamActive ? (() => {
+    const teamRows = state.commission.filter((r) => teamFor(r.agent_name) === state.ledgerTeam && (!state.ledgerMonth || r.month === state.ledgerMonth));
+    const tsum = (k) => teamRows.reduce((s, r) => s + (+r[k] || 0), 0);
+    const heads = new Set(teamRows.map((r) => r.agent_name).filter(Boolean));
+    return `<div class="ledger-teamband">
+      <div class="ledger-teamband-head"><span class="card-kicker">Team roll-up</span><h2>${esc(state.ledgerTeam)} — ${monthLabel(state.ledgerMonth)}</h2><span class="text-muted">${heads.size} agent${heads.size === 1 ? "" : "s"} · ${teamRows.length} deal${teamRows.length === 1 ? "" : "s"}</span></div>
+      <div class="ledger-metrics">
+        <div class="ledger-metric is-accent"><span class="ledger-metric-label">Commission received (full ${esc(state.ledgerTeam)})</span><span class="ledger-metric-value">${money(Math.round(tsum("received")))}</span></div>
+        <div class="ledger-metric"><span class="ledger-metric-label">VAT @ 5%</span><span class="ledger-metric-value">${money(Math.round(tsum("vat")))}</span></div>
+        <div class="ledger-metric"><span class="ledger-metric-label">Agent share</span><span class="ledger-metric-value">${money(Math.round(tsum("agent_share")))}</span></div>
+        <div class="ledger-metric"><span class="ledger-metric-label">Xsite share</span><span class="ledger-metric-value">${money(Math.round(tsum("xsite_share")))}</span></div>
+      </div>
+    </div>` ;
+  })() : "";
   const list = filtered.map((n) => `
     <button class="ledger-agent ${n === state.selectedAgent ? "is-active" : ""}" data-agent="${esc(n)}">
       <span class="ledger-avatar">${esc(n.split(" ").map((w) => w[0]).join("").slice(0, 2))}</span>
@@ -2092,7 +2121,61 @@ function viewLedgers() {
         ${teamTabs}
         ${list || `<div class="md-empty">No agents.</div>`}
       </aside>
-      <div style="min-width:0">${sheet}</div>
+      <div style="min-width:0">${teamBand}${sheet}</div>
+    </div>
+  </div>`;
+}
+
+// Official Xsite commission statement — matches the printed "COMMISSION SHEET".
+function viewLedgerStatement() {
+  if (!state.printLedger || !state.selectedAgent) return "";
+  const rows = state.commission.filter((r) => sameAgent(r.agent_name, state.selectedAgent) && (!state.ledgerMonth || r.month === state.ledgerMonth));
+  const sum = (k) => rows.reduce((s, r) => s + (+r[k] || 0), 0);
+  const received = sum("received"), vat = sum("vat"), exVat = sum("commission_ex_vat");
+  const agentBusiness = sum("agent_business"), xsite = sum("xsite_share"), agentShare = sum("agent_share");
+  const otherAgentShare = exVat - agentBusiness;
+  const agentBizInclVat = agentBusiness + vat / 2;
+  const cell = (v) => `<td class="ls-num">${num2(v)}</td>`;
+  const body = rows.map((r, i) => `<tr>
+    <td>${i + 1}</td><td>${esc(showDate(r.entry_date, r.entry_date_raw))}</td>
+    <td>${esc(r.third_party && r.third_party !== "N/A" ? r.third_party : "N/A")}</td>
+    <td>${esc(r.agent2 && r.agent2 !== "N/A" ? r.agent2 : "")}</td>
+    <td>${esc(r.deal_type || "")}</td><td>${esc(r.unit || "")}</td><td>${esc(r.building || "")}</td><td>${esc(r.area || "")}</td>
+    ${cell(r.annual_value)}${cell(r.total_commission)}${cell(r.received)}${cell(r.vat)}${cell(r.commission_ex_vat)}${cell(r.agent_business)}${cell(r.xsite_share)}${cell(r.agent_share)}
+  </tr>`).join("");
+  const summ = (label, val) => `<tr><td class="ls-sum-label">${label}</td><td class="ls-num">${num2(val)}</td></tr>`;
+  return `<div class="ls-shell" role="dialog" aria-modal="true" aria-label="Commission statement" tabindex="-1">
+    <div class="contract-print-toolbar ls-toolbar">
+      <div><strong>Commission Statement</strong><div>${esc(state.selectedAgent)} · ${monthLabel(state.ledgerMonth)}</div></div>
+      <div><button class="btn btn-secondary" id="lsclose">Back</button> <button class="btn btn-primary" id="lsprint">Print / Save PDF</button></div>
+    </div>
+    <div class="ls-sheet">
+      <div class="ls-head"><img class="ls-logo" src="./xsite-logo.png" alt="Xsite"></div>
+      <table class="ls-title"><tr><td class="ls-t1" colspan="2">XSITE REAL ESTATE BROKERS</td></tr>
+        <tr><td class="ls-t2" colspan="2">COMMISSION SHEET</td></tr>
+        <tr><td class="ls-lbl">AGENT NAME</td><td class="ls-val">${esc(state.selectedAgent)}</td></tr>
+        <tr><td class="ls-lbl">FOR THE MONTH</td><td class="ls-val">${esc(monthLabel(state.ledgerMonth))}</td></tr>
+      </table>
+      <table class="ls-grid">
+        <thead><tr>
+          <th>S.NO</th><th>Date</th><th>Third Party</th><th>Agent 2</th><th>Rent/Sale/ Off Plan</th><th>Unit No</th><th>Building</th><th>Area</th>
+          <th>Annual Rent/ Sale Price</th><th>Total Commission Including 3rd Party</th><th>Commission Received</th><th>VAT@5%</th><th>Commission Exclusive Of VAT</th><th>Agent Business</th><th>Xsite Share@50%</th><th>Agent Share@50%</th>
+        </tr></thead>
+        <tbody>${body || `<tr><td colspan="16" style="text-align:center;padding:14px">No entries for this month.</td></tr>`}</tbody>
+        <tfoot><tr class="ls-total"><td colspan="8">Total</td>
+          <td class="ls-num">${num2(sum("annual_value"))}</td>${cell(sum("total_commission"))}${cell(received)}${cell(vat)}${cell(exVat)}${cell(agentBusiness)}${cell(xsite)}${cell(agentShare)}</tr></tfoot>
+      </table>
+      <div class="ls-lower">
+        <table class="ls-summary">
+          ${summ("Total Commission", received)}${summ("VAT@5%", vat)}${summ("Commission Exclusive Of VAT", exVat)}
+          ${summ("Other Agent Share", otherAgentShare)}${summ("Agent Business", agentBusiness)}${summ("Xsite Share@50%", xsite)}${summ("Agent Share@50%", agentShare)}
+          <tr><td class="ls-incl">Agent Business Inclding VAT</td><td class="ls-num ls-incl">${num2(agentBizInclVat)}</td></tr>
+        </table>
+      </div>
+      <div class="ls-sign">
+        <div><div class="ls-sign-name">MUHAMMAD ALAMGIR</div><div class="ls-sign-role">MANAGING DIRECTOR</div></div>
+        <div><div class="ls-sign-name">${esc(state.selectedAgent)}</div><div class="ls-sign-role">REALTOR</div></div>
+      </div>
     </div>
   </div>`;
 }
@@ -2128,7 +2211,7 @@ function exportDocuments() {
 }
 
 function exportLedger() {
-  const rows = state.commission.filter((r) => r.agent_name === state.selectedAgent && (!state.ledgerMonth || r.month === state.ledgerMonth));
+  const rows = state.commission.filter((r) => sameAgent(r.agent_name, state.selectedAgent) && (!state.ledgerMonth || r.month === state.ledgerMonth));
   const safeAgent = (state.selectedAgent || "agent").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   downloadCsv(`xsite-ledger-${safeAgent}-${state.ledgerMonth || "all"}.csv`, rows, [
     ["Date", "entry_date"], ["Agent", "agent_name"], ["Third party", "third_party"], ["Agent 2", "agent2"],
@@ -3204,7 +3287,7 @@ function wireScreen() {
     document.querySelectorAll(".inv-in").forEach((el) => { if (el.oninput === null || !el.oninput) el.addEventListener("input", () => { const s = document.getElementById("invsave"); if (s) s.textContent = "Save draft"; }); });
   }
   const exportLedgerButton = document.getElementById("exportledger"); if (exportLedgerButton) exportLedgerButton.onclick = exportLedger;
-  const printLedger = document.getElementById("printledger"); if (printLedger) printLedger.onclick = () => window.print();
+  const printLedger = document.getElementById("printledger"); if (printLedger) printLedger.onclick = () => { state.printLedger = true; render(); };
   // agent requests
   root.querySelectorAll("[data-requeststatus]").forEach((button) => button.onclick = () => { state.requestStatus = button.dataset.requeststatus; render(); });
   const newRequest = document.getElementById("newrequest"); if (newRequest) newRequest.onclick = () => { state.requestForm = { msg: "" }; render(); };
@@ -3391,6 +3474,8 @@ function wireModals() {
   const sbfUpload = document.getElementById("sbf_upload"); if (sbfUpload) sbfUpload.onclick = uploadSubmissionFile;
   const sdClose = document.getElementById("sdclose"); if (sdClose) sdClose.onclick = () => { state.subView = null; render(); };
   const sdCancel = document.getElementById("sdcancel"); if (sdCancel) sdCancel.onclick = () => { state.subView = null; render(); };
+  const lsClose = document.getElementById("lsclose"); if (lsClose) lsClose.onclick = () => { state.printLedger = false; render(); };
+  const lsPrint = document.getElementById("lsprint"); if (lsPrint) lsPrint.onclick = () => window.print();
   const printClose = document.getElementById("printclose"); if (printClose) printClose.onclick = () => { state.printContract = null; render(); };
   const printNow = document.getElementById("printnow"); if (printNow) printNow.onclick = async () => {
     printNow.disabled = true; printNow.textContent = "Preparing pages…";
@@ -3406,6 +3491,7 @@ function wireModals() {
   };
   document.onkeydown = (event) => {
     if (event.key !== "Escape") return;
+    if (state.printLedger) { state.printLedger = false; render(); }
     if (state.printReceipt) { state.printReceipt = null; render(); }
     else if (state.printInvoice) { state.printInvoice = null; render(); }
     else if (state.printContract) { state.printContract = null; render(); }

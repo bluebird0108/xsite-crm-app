@@ -171,7 +171,12 @@ main { flex: 1; padding: var(--space-6); max-width: 1280px; width: 100%; margin:
 }
 .table-wrap { overflow-x: auto; background: #fff; }
 table.grid { border-collapse: collapse; margin: 0; font-variant-numeric: tabular-nums; width: 100%; }
-table.grid.wide { min-width: 1700px; }
+table.grid.wide { min-width: 1560px; font-size: 11px; }
+table.grid.wide th { padding: 8px 7px; font-size: 9.5px; }
+table.grid.wide td { padding: 7px 7px; font-size: 10.5px; }
+.ledger-teamband { margin-bottom: var(--space-4); }
+.ledger-teamband-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.ledger-teamband-head h2 { margin: 0; font-size: 18px; font-weight: 800; }
 .grid th {
   padding: 10px 8px; border-right: 1px solid var(--color-neutral-500); border-bottom: 2px solid var(--color-text);
   background: var(--color-neutral-200); color: var(--color-neutral-900); font-size: 10px; line-height: 1.25;
@@ -310,7 +315,39 @@ table.grid.wide { min-width: 1700px; }
 .clause-check input { margin-top: 2px; flex: 0 0 auto; }
 .clause-whiteout { position: absolute; left: 1.5%; width: 96.5%; background: #fff; }
 
+/* ── official commission statement print ── */
+.ls-shell { position: fixed; inset: 0; z-index: 100; overflow: auto; padding: 20px; background: #292929; }
+.ls-toolbar { position: sticky; top: 0; }
+.ls-sheet { width: 297mm; min-height: 210mm; margin: 16px auto; background: #fff; color: #111; padding: 12mm; box-shadow: var(--shadow-lg); font-size: 9px; }
+.ls-head { margin-bottom: 6px; }
+.ls-logo { height: 34px; width: auto; }
+.ls-title { border-collapse: collapse; margin-bottom: 8px; }
+.ls-title td { border: 1px solid #111; padding: 2px 8px; font-size: 10px; }
+.ls-t1 { font-weight: 800; } .ls-t2 { font-weight: 800; text-align: center; }
+.ls-lbl { font-weight: 700; width: 120px; } .ls-val { font-weight: 700; min-width: 200px; }
+.ls-grid { width: 100%; border-collapse: collapse; }
+.ls-grid th, .ls-grid td { border: 1px solid #111; padding: 3px 4px; vertical-align: middle; }
+.ls-grid th { font-size: 8px; font-weight: 800; text-align: center; background: #f2f2f2; }
+.ls-num { text-align: right; white-space: nowrap; }
+.ls-total td { font-weight: 800; text-align: right; }
+.ls-total td:first-child { text-align: center; }
+.ls-lower { display: flex; justify-content: center; margin-top: 18px; }
+.ls-summary { border-collapse: collapse; width: 340px; }
+.ls-summary td { border: 1px solid #111; padding: 4px 8px; font-size: 10px; }
+.ls-sum-label { font-weight: 700; }
+.ls-incl { font-weight: 800; background: #eef3e7; }
+.ls-sign { display: flex; gap: 120px; margin-top: 40px; padding-left: 8px; }
+.ls-sign-name { font-weight: 800; font-size: 11px; }
+.ls-sign-role { font-weight: 700; font-size: 10px; }
+
 @media print {
+  body:has(.ls-shell) * { visibility: hidden !important; }
+  body:has(.ls-shell) .ls-shell, body:has(.ls-shell) .ls-shell * { visibility: visible !important; }
+  body:has(.ls-shell) .ls-toolbar { display: none !important; }
+  body:has(.ls-shell) .ls-shell { position: absolute; inset: 0; background: #fff; padding: 0; overflow: visible; }
+  body:has(.ls-shell) .ls-sheet { width: 297mm; margin: 0; box-shadow: none; }
+  @page { size: A4 landscape; }
+
   @page { size: A4; margin: 0; }
   body { background: #fff; }
   body:has(.contract-print-shell) * { visibility: hidden !important; }
