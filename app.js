@@ -1566,10 +1566,28 @@ async function markPaid(id) {
 }
 async function deleteDoc(id) {
   const d = state.docs.find((x) => x.id === id);
-  if (!d || !window.confirm(`Delete ${d.doc_no} (${money(d.amount)})?`)) return;
-  const { error } = await supabase.from("money_docs").delete().eq("id", id);
+  if (!d) return;
+  // A doc created from a contract task is referenced by that task (FK), so it
+  // must be detached — and the task reopened — before the row can be deleted.
+  const linkedTasks = state.accountTasks.filter((t) => t.money_doc_id === id);
+  const warning = linkedTasks.length
+    ? `Delete ${d.doc_no} (${money(d.amount)})?\n\nIt was created from a contract task — the task will reopen under "Contracts awaiting Accounts" so it can be re-issued.`
+    : `Delete ${d.doc_no} (${money(d.amount)})?`;
+  if (!window.confirm(warning)) return;
+  let error = null;
+  const rpc = await supabase.rpc("delete_money_doc", { p_doc_id: id });
+  if (rpc.error && /function|does not exist|schema cache/i.test(rpc.error.message)) {
+    // Function not created yet: detach the task(s) first, then delete.
+    if (linkedTasks.length) {
+      const detach = await supabase.from("account_tasks")
+        .update({ money_doc_id: null, status: "pending", completed_by: null, completed_at: null })
+        .eq("money_doc_id", id);
+      if (detach.error) { window.alert("Could not detach the contract task: " + detach.error.message); return; }
+    }
+    ({ error } = await supabase.from("money_docs").delete().eq("id", id));
+  } else error = rpc.error;
   if (error) { window.alert("Could not delete: " + error.message); return; }
-  if (!await reloadAfterWrite(reloadDocs, "Document deletion")) return;
+  if (!await reloadAfterWrite(reloadContracts, "Document deletion")) return;
   render();
 }
 
