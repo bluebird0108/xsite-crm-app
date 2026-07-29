@@ -29,7 +29,7 @@ const state = {
   staffQuery: "", staffBranch: "All", requestStatus: "All",
   contactQuery: "", contactType: "All",
   cbMonth: null, cbChannel: "All", cbQuery: "",
-  dashQuery: "",
+  dashQuery: "", activityDay: null,
   dealForm: null, pwForm: false, docForm: null, cashForm: null, requestForm: null,
   contractForm: null, printContract: null, printInvoice: null,
   contactForm: null, cashMoveForm: null,
@@ -95,8 +95,8 @@ const COLUMNS = {
   agent_requests: "id,created_by,submitter_name,request_type,subject,deal_group,details,status,response,created_at,updated_at",
   contracts: "id,contract_no,deal_group,status,contract_date,start_date,end_date,landlord_name,tenant_name,owner_phone,tenant_phone,annual_rent,security_deposit,payment_mode,additional_terms,details,addendum,ejari_status,created_by,finalized_by,finalized_at,created_at,updated_at",
   account_tasks: "id,contract_id,task_type,status,money_doc_id,completed_by,completed_at,created_at",
-  contacts: "id,name,contact_type,phone,email,notes,last_contact,created_at,updated_at",
-  cash_movements: "id,movement_date,direction,channel,bank_account,agent_name,client,property,amount,reference,month,created_at",
+  contacts: "id,name,contact_type,phone,email,notes,last_contact,birthday,created_by,created_at,updated_at",
+  cash_movements: "id,movement_date,direction,channel,bank_account,agent_name,client,property,amount,reference,month,created_by,created_at",
 };
 async function fetchAll(table, orderColumn, ascending = true, columns = COLUMNS[table]) {
   const rows = [];
@@ -112,7 +112,7 @@ async function fetchAll(table, orderColumn, ascending = true, columns = COLUMNS[
 // Some columns (ejari_status, staff.birthday) are added by the feature-merge
 // migration. Load with them, but fall back to the base column set if the
 // migration has not been applied yet, so contracts/staff still load.
-const OPTIONAL_COLUMNS = { contracts: ["ejari_status"], staff: ["birthday"] };
+const OPTIONAL_COLUMNS = { contracts: ["ejari_status"], staff: ["birthday"], contacts: ["birthday"] };
 async function fetchAllOptional(table, orderColumn, ascending = true) {
   try { return await fetchAll(table, orderColumn, ascending); }
   catch (error) {
@@ -126,8 +126,8 @@ async function fetchAllOptional(table, orderColumn, ascending = true) {
 // Non-fatal fetch for features whose backend migration may not be applied yet
 // (contacts, cash_movements). A missing table/column degrades the feature to
 // empty instead of breaking the whole workspace load.
-async function fetchAllSafe(table, orderColumn, ascending = true) {
-  try { return await fetchAll(table, orderColumn, ascending); }
+async function fetchAllSafe(table, orderColumn, ascending = true, optionalColumns = false) {
+  try { return optionalColumns ? await fetchAllOptional(table, orderColumn, ascending) : await fetchAll(table, orderColumn, ascending); }
   catch (error) { console.warn(`[xsite] ${table} unavailable — feature disabled until migration is applied:`, error.message); return { data: [] }; }
 }
 function downloadCsv(filename, rows, columns) {
@@ -156,11 +156,11 @@ async function loadData() {
     roleIn("owner", "accounts", "admin") ? fetchAll("cash_position", "sort_order") : Promise.resolve({ data: [] }),
     roleIn("owner") ? fetchAll("profiles", "created_at") : Promise.resolve({ data: [] }),
     roleIn("owner", "accounts", "admin") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
-    roleIn("owner", "admin", "accounts") ? fetchAllOptional("staff", "name") : Promise.resolve({ data: [] }),
+    roleIn("owner", "admin") ? fetchAllOptional("staff", "name") : Promise.resolve({ data: [] }),
     fetchAll("agent_requests", "created_at", false),
     fetchAllOptional("contracts", "created_at", false),
     roleIn("owner", "accounts", "admin") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
-    roleIn("owner", "accounts", "admin") ? fetchAllSafe("contacts", "name") : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin") ? fetchAllSafe("contacts", "name", true, true) : Promise.resolve({ data: [] }),
     roleIn("owner", "accounts", "admin") ? fetchAllSafe("cash_movements", "movement_date", false) : Promise.resolve({ data: [] }),
   ]);
   state.agents = requireData(ag, "Could not load agents");
@@ -369,26 +369,25 @@ function navLink(screen, label) {
 }
 function renderApp() {
   const p = state.profile;
-  const showTx = roleIn("owner", "accounts", "admin");
-  const showLedger = roleIn("owner", "accounts", "admin") || p.role === "agent";
   const showTeam = roleIn("owner");
   const pendingTeam = state.team.filter((t) => t.role === "pending").length;
   const pendingRequests = state.requests.filter((request) => request.status === "pending").length;
   const pendingAccountTasks = state.accountTasks.filter((task) => task.status === "pending").length;
   const renewalAlerts = state.contracts.filter((contract) => contract.status === "final" && ["due", "expired"].includes(renewalStatus(contract.end_date).status)).length;
   const contractAlerts = pendingAccountTasks + renewalAlerts;
-  const ledgerLabel = p.role === "agent" ? "My Ledger" : "Agent Ledgers";
   const nav = `
   <nav class="nav">
     <div class="nav-brand"><img src="./xsite-logo.png" alt="Xsite"></div>
     ${roleIn("owner", "accounts", "admin") ? navLink("dashboard", "Dashboard") : ""}
+    ${roleIn("owner") ? navLink("activity", "Team Activity") : ""}
+    ${roleIn("owner", "admin") ? navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts") : ""}
     ${roleIn("owner", "admin") ? navLink("contacts", "Contacts") : ""}
-    ${showTx ? navLink("transactions", "Transactions") : ""}
-    ${roleIn("owner", "accounts", "admin") ? navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts") : ""}
-    ${roleIn("owner", "accounts", "admin") ? navLink("invoices", "Invoices & Receipts") : ""}
+    ${roleIn("owner", "accounts") ? navLink("transactions", "Transactions") : ""}
+    ${roleIn("owner", "accounts") ? navLink("invoices", "Invoices & Receipts") : ""}
     ${roleIn("owner", "accounts") ? navLink("cashbank", "Cash & Bank") : ""}
+    ${roleIn("owner", "accounts", "agent") ? navLink("ledgers", roleIn("agent") ? "My Ledger" : "Agent Ledgers") : ""}
     ${roleIn("pending") ? "" : navLink("requests", pendingRequests ? `Requests (${pendingRequests})` : "Requests")}
-    ${roleIn("owner", "admin", "accounts") ? navLink("staff", "Staff") : ""}
+    ${roleIn("owner", "admin") ? navLink("staff", "Staff") : ""}
     ${showTeam ? navLink("team", pendingTeam ? `Team (${pendingTeam})` : "Team") : ""}
     <div class="nav-right">
       <span class="tag tag-neutral">${esc(p.role)}</span>
@@ -400,15 +399,17 @@ function renderApp() {
   let body = "";
   if (state.fatalError) body = viewFatalError();
   else if (roleIn("pending")) body = viewPending();
+  else if (state.screen === "activity" && roleIn("owner")) body = viewTeamActivity();
   else if (state.screen === "contacts" && roleIn("owner", "admin")) body = viewContacts();
-  else if (state.screen === "transactions" && showTx) body = viewTransactions();
-  else if (state.screen === "contracts" && roleIn("owner", "accounts", "admin")) body = viewContracts();
-  else if (state.screen === "invoices" && roleIn("owner", "accounts", "admin")) body = viewInvoices();
+  else if (state.screen === "transactions" && roleIn("owner", "accounts")) body = viewTransactions();
+  else if (state.screen === "contracts" && roleIn("owner", "admin")) body = viewContracts();
+  else if (state.screen === "invoices" && roleIn("owner", "accounts")) body = viewInvoices();
   else if (state.screen === "cashbank" && roleIn("owner", "accounts")) body = viewCashBank();
+  else if (state.screen === "ledgers" && roleIn("owner", "accounts", "agent")) body = viewLedgers();
   else if (state.screen === "requests") body = viewRequests();
-  else if (state.screen === "staff" && roleIn("owner", "admin", "accounts")) body = viewStaff();
+  else if (state.screen === "staff" && roleIn("owner", "admin")) body = viewStaff();
   else if (state.screen === "team" && showTeam) body = viewTeam();
-  else if (roleIn("agent")) body = viewRequests();
+  else if (roleIn("agent")) body = viewLedgers();
   else body = viewDashboard();
   root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewContactModal() + viewCashMoveModal();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
@@ -541,16 +542,25 @@ function requestStatusLabel(status) {
   return status === "in_review" ? "In review" : status.charAt(0).toUpperCase() + status.slice(1);
 }
 
+// Money requests (salary, advance, payout, commission queries) are reviewed by
+// Accounts; leave and document requests by Admin. Owner can action anything.
+const MONEY_REQUESTS = ["salary_advance", "commission_payout", "commission_query", "deal_correction"];
+function canReviewRequest(request) {
+  if (roleIn("owner")) return true;
+  if (roleIn("accounts")) return MONEY_REQUESTS.includes(request.request_type);
+  if (roleIn("admin")) return !MONEY_REQUESTS.includes(request.request_type);
+  return false;
+}
 function viewRequests() {
   const canSubmit = roleIn("agent");
-  const canReview = roleIn("owner", "accounts");
+  const canReview = roleIn("owner", "accounts", "admin");
   const statuses = ["All", "pending", "in_review", "resolved", "rejected"];
   const tabs = statuses.map((status) => `<button class="tab ${state.requestStatus === status ? "is-active" : ""}" data-requeststatus="${status}">${status === "All" ? "All" : requestStatusLabel(status)}</button>`).join("");
   const rows = state.requests.filter((request) => state.requestStatus === "All" || request.status === state.requestStatus);
   const body = rows.map((request) => {
     const date = new Date(request.created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
     const deal = request.deal_group ? dealLabelFor(request.deal_group) : "—";
-    const action = canReview ? `<div data-requestrow="${request.id}" style="display:grid;gap:6px;min-width:220px">
+    const action = canReviewRequest(request) ? `<div data-requestrow="${request.id}" style="display:grid;gap:6px;min-width:220px">
       <select class="input" data-request-state style="padding:6px 8px">
         ${["pending","in_review","resolved","rejected"].map((status) => `<option value="${status}" ${status === request.status ? "selected" : ""}>${requestStatusLabel(status)}</option>`).join("")}
       </select>
@@ -661,6 +671,36 @@ function openContractForm(contract = null) {
   render();
 }
 
+// Contract → Accounts hand-off. Admin finalizes a contract; Accounts sees the
+// full details here (tenant, landlord, rent, deposit, payment mode) and raises
+// the matching invoice or receipt without re-keying anything. Rendered on both
+// the Contracts screen (owner/admin oversight) and Invoices (accounts action).
+function contractHandoffSection() {
+  if (!roleIn("owner", "accounts", "admin") || !state.accountTasks.length) return "";
+  const canFulfill = roleIn("owner", "accounts");
+  const pending = state.accountTasks.filter((t) => t.status === "pending").length;
+  const taskRows = state.accountTasks.map((task) => {
+    const contract = state.contracts.find((c) => c.id === task.contract_id);
+    if (!contract) return "";
+    const doc = state.docs.find((d) => d.id === task.money_doc_id);
+    const action = task.status === "pending" && canFulfill ? `<div data-accounttask="${task.id}" style="display:flex;gap:6px;flex-wrap:wrap;align-items:end">
+      <label class="field compact-field">Type<select class="input" data-tasktype><option value="invoice">Invoice</option><option value="receipt">Receipt</option></select></label>
+      <label class="field compact-field">Date<input class="input" type="date" data-taskdate value="${todayIso()}"></label>
+      <label class="field compact-field">Amount<input class="input" type="number" min="0.01" step="0.01" data-taskamount value="${esc(contract.details?.contractValue || contract.annual_rent)}"></label>
+      <label class="field compact-field">Payment<input class="input" data-taskpayment value="${esc(contract.payment_mode || "")}" placeholder="Cheque / transfer"></label>
+      <button class="btn btn-primary btn-mini" data-fulfilltask>Create</button></div>` : `<span class="tag tag-neutral">${doc ? esc(doc.doc_no) : "Completed"}</span>`;
+    return `<tr><td><strong>${esc(contract.contract_no)}</strong><div class="text-muted" style="font-size:11px">${showDate(contract.start_date)} – ${showDate(contract.end_date)}</div></td>
+      <td>${esc(contract.tenant_name)}<div class="text-muted" style="font-size:11px">${esc(contract.tenant_phone || "")}</div></td>
+      <td>${esc(contract.landlord_name || "—")}<div class="text-muted" style="font-size:11px">${esc(contract.owner_phone || "")}</div></td>
+      <td class="numeric">${money(contract.annual_rent)}</td>
+      <td class="numeric">${money(contract.security_deposit)}</td>
+      <td>${esc(contract.payment_mode || "—")}</td>
+      <td><span class="tag ${task.status === "pending" ? "tag-accent" : "tag-neutral"}">${esc(task.status)}</span></td><td>${action}</td></tr>`;
+  }).join("");
+  return `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Contracts awaiting Accounts</h3><span class="tag ${pending ? "tag-accent" : "tag-neutral"}">${pending} pending</span></div>
+    <div class="table-wrap"><table class="grid" style="min-width:1100px"><thead><tr><th>Contract</th><th>Tenant</th><th>Landlord / owner</th><th>Annual rent</th><th>Deposit</th><th>Payment mode</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div></section>`;
+}
+
 function viewContracts() {
   const canManage = roleIn("owner", "admin");
   const canFulfill = roleIn("owner", "accounts");
@@ -685,18 +725,6 @@ function viewContracts() {
       <td><span class="${renewal.status === "expired" ? "expiry-days is-overdue" : renewal.status === "due" ? "expiry-days" : "text-muted"}">${esc(renewalText)}</span></td>
       <td style="white-space:nowrap">${canManage && contract.status === "draft" ? `<button class="btn btn-secondary btn-mini" data-editcontract="${contract.id}">Edit</button> ` : ""}<button class="btn btn-primary btn-mini" data-printcontract="${contract.id}">View / print</button></td></tr>`;
   }).join("");
-  const taskRows = state.accountTasks.map((task) => {
-    const contract = state.contracts.find((c) => c.id === task.contract_id);
-    if (!contract) return "";
-    const doc = state.docs.find((d) => d.id === task.money_doc_id);
-    const action = task.status === "pending" && canFulfill ? `<div data-accounttask="${task.id}" style="display:flex;gap:6px;flex-wrap:wrap;align-items:end">
-      <label class="field compact-field">Type<select class="input" data-tasktype><option value="invoice">Invoice</option><option value="receipt">Receipt</option></select></label>
-      <label class="field compact-field">Date<input class="input" type="date" data-taskdate value="${todayIso()}"></label>
-      <label class="field compact-field">Amount<input class="input" type="number" min="0.01" step="0.01" data-taskamount value="${esc(contract.details?.contractValue || contract.annual_rent)}"></label>
-      <label class="field compact-field">Payment<input class="input" data-taskpayment placeholder="Cheque / transfer"></label>
-      <button class="btn btn-primary btn-mini" data-fulfilltask>Create</button></div>` : `<span class="tag tag-neutral">${doc ? esc(doc.doc_no) : "Completed"}</span>`;
-    return `<tr><td>${esc(contract.contract_no)}</td><td>${esc(contract.tenant_name)}</td><td>${money(contract.annual_rent)}</td><td><span class="tag ${task.status === "pending" ? "tag-accent" : "tag-neutral"}">${esc(task.status)}</span></td><td>${action}</td></tr>`;
-  }).join("");
   return `<div>
     <div style="margin-bottom:20px;display:flex;justify-content:space-between;gap:16px;align-items:end;flex-wrap:wrap">
       <div><span class="card-kicker">Tenancy operations</span><h1 style="margin-top:4px">${roleIn("agent") ? "My Tenancy Contracts" : "Contracts & Addenda"}</h1><p class="text-muted" style="margin:0">DLD contract drafts, Xsite addenda, 90-day renewals, and Accounts hand-off.</p></div>
@@ -704,8 +732,7 @@ function viewContracts() {
     </div>
     ${reminders.length ? `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Renewal reminders</h3><span class="tag tag-accent">${reminders.filter(({renewal})=>renewal.status==="due").length} due · ${reminders.filter(({renewal})=>renewal.status==="expired").length} expired</span></div>
       <div class="expiry-list">${reminders.map(({contract,renewal}) => `<div class="expiry-row"><div><strong>${esc(contract.contract_no)} · ${esc(contract.tenant_name)}</strong><div class="text-muted">${esc(dealLabelFor(contract.deal_group))} · ends ${showDate(contract.end_date)}</div></div><span class="${renewal.status === "expired" ? "expiry-days is-overdue" : "expiry-days"}">${renewal.status === "expired" ? `${Math.abs(renewal.days)}d overdue` : `${renewal.days}d left`}</span></div>`).join("")}</div></section>` : ""}
-    ${roleIn("owner", "accounts", "admin") && state.accountTasks.length ? `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Accounts notifications</h3><span class="tag tag-accent">${state.accountTasks.filter((t)=>t.status==="pending").length} pending</span></div>
-      <div class="table-wrap"><table class="grid"><thead><tr><th>Contract</th><th>Tenant</th><th>Contract value</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div></section>` : ""}
+    ${contractHandoffSection()}
     <div class="sheet"><div class="sheet-hint">${roleIn("agent") ? "Only finalized contracts linked to your deals are visible" : `${state.contracts.length} saved contract records`}</div>
       <div class="table-wrap"><table class="grid" style="min-width:1080px"><thead><tr><th>Contract</th><th>Deal</th><th>Parties</th><th>Term</th><th>Status</th><th>Ejari</th><th>Renewal</th><th></th></tr></thead><tbody>${contractRows || `<tr><td colspan="8"><div class="md-empty" style="border:0">No contracts yet.</div></td></tr>`}</tbody></table></div></div>
   </div>`;
@@ -1277,6 +1304,7 @@ function viewInvoices() {
         <button class="btn btn-primary" id="newdoc">+ New receipt / invoice</button>
       </div>
     </div>
+    ${contractHandoffSection()}
     <section class="md-kpi-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:20px">
       <div class="md-kpi is-accent"><span class="card-kicker">Receipts — ${monthLabel(state.invMonth)}</span><span class="md-kpi-value">${money(Math.round(received))}</span><span class="md-kpi-detail">${monthDocs.filter((d)=>d.doc_type==="receipt").length} receipts recorded</span></div>
       <div class="md-kpi"><span class="card-kicker">Invoiced</span><span class="md-kpi-value">${money(Math.round(invoiced))}</span><span class="md-kpi-detail">${monthDocs.filter((d)=>d.doc_type==="invoice").length} invoices raised</span></div>
@@ -1742,11 +1770,11 @@ function exportLedger() {
 // ── view: contacts (owner + admin) ───────────────────────
 const CONTACT_TYPES = ["Buyer", "Seller", "Tenant", "Landlord"];
 function emptyContactForm() {
-  return { id: null, name: "", contact_type: "Tenant", phone: "", email: "", last_contact: "", notes: "", msg: "" };
+  return { id: null, name: "", contact_type: "Tenant", phone: "", email: "", last_contact: "", birthday: "", notes: "", msg: "" };
 }
 function contactFormFromRow(c) {
   return { id: c.id, name: c.name || "", contact_type: c.contact_type || "Tenant", phone: c.phone || "",
-    email: c.email || "", last_contact: c.last_contact || "", notes: c.notes || "", msg: "" };
+    email: c.email || "", last_contact: c.last_contact || "", birthday: c.birthday || "", notes: c.notes || "", msg: "" };
 }
 function viewContacts() {
   const canManage = roleIn("owner", "admin");
@@ -1795,6 +1823,7 @@ function viewContactModal() {
           <div class="field"><label for="co_phone">Phone</label><input class="input" id="co_phone" type="tel" maxlength="60" value="${esc(f.phone)}"></div>
           <div class="field"><label for="co_email">Email</label><input class="input" id="co_email" type="email" maxlength="200" value="${esc(f.email)}"></div>
           <div class="field"><label for="co_last">Last contact</label><input class="input" id="co_last" type="date" value="${esc(f.last_contact)}"></div>
+          <div class="field"><label for="co_birthday">Birthday</label><input class="input" id="co_birthday" type="date" value="${esc(f.birthday)}"></div>
           <div class="field" style="grid-column:1/-1"><label for="co_notes">Notes</label><textarea class="input" id="co_notes" rows="4" maxlength="2000">${esc(f.notes)}</textarea></div>
         </div>
         <div class="modal-actions"><span class="form-msg" id="contactmsg2">${esc(f.msg || "")}</span><button class="btn btn-secondary" id="contactcancel2">Cancel</button><button class="btn btn-primary" id="contactsave2">${f.id ? "Save changes" : "Save contact"}</button></div>
@@ -1811,12 +1840,19 @@ async function saveContactForm() {
   if (name.length < 2) { msg.textContent = "Enter a contact name."; return; }
   if (email && !document.getElementById("co_email").checkValidity()) { msg.textContent = "Enter a valid email address."; return; }
   const btn = document.getElementById("contactsave2"); btn.disabled = true; btn.textContent = "Saving…";
-  const { error } = await supabase.rpc("save_contact", {
+  const { data: savedId, error } = await supabase.rpc("save_contact", {
     p_id: f.id, p_name: name, p_contact_type: g("co_type"),
     p_phone: g("co_phone").trim() || null, p_email: email || null,
     p_notes: g("co_notes").trim() || null, p_last_contact: g("co_last") || null,
   });
   if (error) { msg.textContent = error.message; btn.disabled = false; btn.textContent = f.id ? "Save changes" : "Save contact"; return; }
+  // Birthday is stored separately so the existing save_contact RPC signature
+  // stays unchanged; ignored if the column has not been added yet.
+  const contactId = f.id || savedId;
+  if (contactId) {
+    const birthdayResult = await supabase.from("contacts").update({ birthday: g("co_birthday") || null }).eq("id", contactId);
+    if (birthdayResult.error) console.warn("[xsite] birthday not saved:", birthdayResult.error.message);
+  }
   if (!await reloadAfterWrite(reloadContacts, "Contact")) return;
   state.contactForm = null; render();
 }
@@ -1978,17 +2014,20 @@ async function toggleEjari(id) {
 }
 
 // ── dashboard helpers (birthdays, Ejari pending, daily) ──
+// Upcoming birthdays within 30 days — staff roster and saved contacts alike.
 function birthdayAlerts() {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const out = [];
-  for (const s of state.staff) {
-    if (!s.birthday || !isoRe.test(s.birthday)) continue;
-    const [, mm, dd] = s.birthday.split("-").map(Number);
+  const add = (name, subtitle, birthday) => {
+    if (!name || !birthday || !isoRe.test(birthday)) return;
+    const [, mm, dd] = birthday.split("-").map(Number);
     let next = new Date(today.getFullYear(), mm - 1, dd);
     if (next < today) next = new Date(today.getFullYear() + 1, mm - 1, dd);
     const days = Math.round((next - today) / 86400000);
-    if (days <= 30) out.push({ name: s.name, job: s.job, days, dateLabel: `${String(dd).padStart(2, "0")}-${MONTHS[mm - 1]}` });
-  }
+    if (days <= 30) out.push({ name, job: subtitle, days, dateLabel: `${String(dd).padStart(2, "0")}-${MONTHS[mm - 1]}` });
+  };
+  state.staff.forEach((s) => add(s.name, s.job, s.birthday));
+  state.contacts.forEach((c) => add(c.name, `Contact · ${c.contact_type || ""}`.trim(), c.birthday));
   return out.sort((a, b) => a.days - b.days);
 }
 function ejariPending() {
@@ -2038,6 +2077,87 @@ function dashboardSearch(query) {
     }
   }
   return out.slice(0, 12);
+}
+
+// ── view: team activity (owner) — who did what, per person ──
+// Attribution comes from the created_by / finalized_by / completed_by columns
+// already stored on each record, so every action is traced to a real account.
+function personName(userId) {
+  if (!userId) return null;
+  const member = state.team.find((t) => t.id === userId);
+  return member ? (member.full_name || member.email || "Unknown") : null;
+}
+// Builds one activity record per action taken across the workspace.
+function activityEntries() {
+  const out = [];
+  const push = (userId, when, dept, text, amount) => {
+    if (!userId) return;
+    out.push({ userId, day: String(when || "").slice(0, 10), dept, text, amount: amount ?? null });
+  };
+  for (const c of state.contracts) {
+    push(c.created_by, c.created_at, "Contracts", `Drafted contract ${c.contract_no || "—"} · ${c.tenant_name || ""}`.trim(), c.annual_rent);
+    if (c.status === "final" && c.finalized_by) {
+      push(c.finalized_by, c.finalized_at || c.updated_at, "Contracts", `Finalized ${c.contract_no || "—"} · ${c.tenant_name || ""}`.trim(), c.annual_rent);
+    }
+  }
+  for (const task of state.accountTasks) {
+    if (task.status !== "pending" && task.completed_by) {
+      const doc = state.docs.find((d) => d.id === task.money_doc_id);
+      push(task.completed_by, task.completed_at, "Accounts", `Issued ${doc ? doc.doc_no : "document"} for a contract`, doc?.amount);
+    }
+  }
+  for (const m of state.cashMovements) {
+    push(m.created_by, m.movement_date || m.created_at, "Accounts",
+      `${m.direction === "in" ? "Recorded cash in" : "Recorded cash out"} · ${m.channel === "bank" ? (m.bank_account || "bank") : "cash in hand"}`, m.amount);
+  }
+  for (const c of state.contacts) {
+    push(c.created_by, c.created_at, "Contacts", `Added contact · ${c.name}`, null);
+  }
+  for (const r of state.requests) {
+    if (r.status !== "pending") {
+      // Reviews are recorded on the request itself; attribute to the submitter's
+      // reviewer only when we can identify them from the team list.
+      push(r.created_by, r.created_at, "Requests", `Request ${requestTypeLabel(r.request_type)} · ${r.status}`, null);
+    }
+  }
+  return out;
+}
+function viewTeamActivity() {
+  const entries = activityEntries();
+  const days = [...new Set(entries.map((e) => e.day).filter(Boolean))].sort().reverse();
+  const day = state.activityDay && days.includes(state.activityDay) ? state.activityDay : (days[0] || todayIso());
+  const dayEntries = entries.filter((e) => e.day === day);
+  // Everyone who can do work in the system, so idle staff still appear.
+  const workers = state.team.filter((t) => ["admin", "accounts", "owner"].includes(t.role));
+  const cards = workers.map((w) => {
+    const mine = dayEntries.filter((e) => e.userId === w.id);
+    const byDept = {};
+    mine.forEach((e) => { (byDept[e.dept] = byDept[e.dept] || []).push(e); });
+    const chips = Object.entries(byDept).map(([dept, list]) => `<span class="tag tag-neutral">${esc(dept)} · ${list.length}</span>`).join(" ");
+    const rows = mine.slice(0, 12).map((e) => `<div class="activity-item"><span class="tag tag-neutral">${esc(e.dept)}</span><span>${esc(e.text)}${e.amount ? ` — ${money(e.amount)}` : ""}</span></div>`).join("");
+    return `<section class="md-section">
+      <div class="md-section-header">
+        <h3 style="font-size:18px">${esc(w.full_name || w.email || "Unknown")}</h3>
+        <span class="tag ${mine.length ? "tag-accent" : "tag-neutral"}">${esc(w.role)} · ${mine.length} action${mine.length === 1 ? "" : "s"}</span>
+      </div>
+      ${chips ? `<div style="margin-bottom:10px">${chips}</div>` : ""}
+      ${rows ? `<div class="activity-feed">${rows}</div>` : `<p class="text-muted" style="font-size:12px;margin:0">No recorded work on this day.</p>`}
+    </section>`;
+  }).join("");
+  const dayOpts = (days.length ? days : [day]).map((d) => `<option value="${d}" ${d === day ? "selected" : ""}>${showDate(d)}${d === days[0] ? " (latest)" : ""}</option>`).join("");
+  return `<div>
+    <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div><span class="card-kicker">Owner / Oversight</span><h1 style="margin-top:4px">Team Activity</h1><p class="text-muted" style="margin:0">What each team member did — ${showDate(day)}.</p></div>
+      <select class="input" id="activityday" style="width:auto">${dayOpts}</select>
+    </div>
+    <section class="md-kpi-grid" style="margin-bottom:20px">
+      <div class="md-kpi is-accent"><span class="card-kicker">Actions today</span><span class="md-kpi-value">${dayEntries.length}</span></div>
+      <div class="md-kpi"><span class="card-kicker">People active</span><span class="md-kpi-value">${new Set(dayEntries.map((e) => e.userId)).size}</span><span class="md-kpi-detail">of ${workers.length} team members</span></div>
+      <div class="md-kpi"><span class="card-kicker">Contracts work</span><span class="md-kpi-value">${dayEntries.filter((e) => e.dept === "Contracts").length}</span></div>
+      <div class="md-kpi"><span class="card-kicker">Accounts work</span><span class="md-kpi-value">${dayEntries.filter((e) => e.dept === "Accounts").length}</span></div>
+    </section>
+    ${workers.length ? `<div class="activity-grid">${cards}</div>` : `<div class="md-empty">No admin or accounts team members yet — assign roles in Team &amp; Access.</div>`}
+  </div>`;
 }
 
 // ── wiring ───────────────────────────────────────────────
@@ -2153,6 +2273,9 @@ function wireScreen() {
   };
   // contracts — Ejari toggle
   root.querySelectorAll("[data-toggleejari]").forEach((b) => b.onclick = () => toggleEjari(b.dataset.toggleejari));
+  // team activity — day selector
+  const activityDay = document.getElementById("activityday");
+  if (activityDay) activityDay.onchange = () => { state.activityDay = activityDay.value; render(); };
   // dashboard — global search + deep links
   const dashSearch = document.getElementById("dashsearch");
   if (dashSearch) dashSearch.oninput = () => {
