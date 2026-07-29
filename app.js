@@ -704,10 +704,11 @@ function contractHandoffSection() {
       <td class="numeric">${money(contract.annual_rent)}</td>
       <td class="numeric">${money(contract.security_deposit)}</td>
       <td>${esc(contract.payment_mode || "—")}</td>
+      <td><button class="btn btn-secondary btn-mini" data-files="${contract.id}">Files${fileCount(contract.id) ? ` (${fileCount(contract.id)})` : ""}</button></td>
       <td><span class="tag ${task.status === "pending" ? "tag-accent" : "tag-neutral"}">${esc(task.status)}</span></td><td>${action}</td></tr>`;
   }).join("");
   return `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Contracts awaiting Accounts</h3><span class="tag ${pending ? "tag-accent" : "tag-neutral"}">${pending} pending</span></div>
-    <div class="table-wrap"><table class="grid" style="min-width:1100px"><thead><tr><th>Contract</th><th>Tenant</th><th>Landlord / owner</th><th>Annual rent</th><th>Deposit</th><th>Payment mode</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div></section>`;
+    <div class="table-wrap"><table class="grid" style="min-width:1100px"><thead><tr><th>Contract</th><th>Tenant</th><th>Landlord / owner</th><th>Annual rent</th><th>Deposit</th><th>Payment mode</th><th>Documents</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div></section>`;
 }
 
 function viewContracts() {
@@ -809,13 +810,21 @@ async function saveContract(status) {
   const fromSubmission = state.contractForm?.fromSubmission;
   state.contractForm = null; await reloadAfterWrite(reloadContracts, status === "final" ? "Final contract" : "Contract draft");
   if (fromSubmission) {
-    // Close the loop: the agent sees their submission turn into a contract.
+    // Close the loop: the agent sees their submission turn into a contract, and
+    // the documents they uploaded (cheque copies, IDs) follow the deal through
+    // to Accounts instead of being stranded on the submission.
     try {
+      const newContract = state.contracts[0];
       await supabase.from("deal_submissions").update({
-        status: "converted", reviewed_by_name: state.profile.full_name || state.profile.email,
+        status: "converted", contract_id: newContract?.id || null,
+        reviewed_by_name: state.profile.full_name || state.profile.email,
         reviewed_at: new Date().toISOString(),
       }).eq("id", fromSubmission);
+      if (newContract?.id) {
+        await supabase.from("contract_files").update({ contract_id: newContract.id }).eq("submission_id", fromSubmission);
+      }
       await reloadSubmissions();
+      await reloadContractFiles();
     } catch { /* non-fatal */ }
   }
   await syncContractContacts(payload);
@@ -2221,7 +2230,11 @@ const DOC_TYPES = [
   ["other", "Other"],
 ];
 const docTypeLabel = (t) => (DOC_TYPES.find(([k]) => k === t) || [null, t])[1];
-const fileCount = (contractId) => state.contractFiles.filter((f) => f.contract_id === contractId).length;
+const fileCount = (contractId) => {
+  const sub = state.submissions.find((x) => x.contract_id === contractId);
+  return state.contractFiles.filter((f) => f.contract_id === contractId || (sub && f.submission_id === sub.id))
+    .filter((x, i, arr) => arr.findIndex((y) => y.id === x.id) === i).length;
+};
 const fileSize = (bytes) => {
   if (!bytes && bytes !== 0) return "—";
   if (bytes < 1024) return `${bytes} B`;
@@ -2241,7 +2254,10 @@ function viewFilesModal() {
   if (!contract) return "";
   const canUpload = roleIn("owner", "admin", "accounts");
   const canDelete = roleIn("owner", "admin");
-  const rows = state.contractFiles.filter((x) => x.contract_id === f.contractId)
+  const linkedSub = state.submissions.find((x) => x.contract_id === f.contractId);
+  const rows = state.contractFiles
+    .filter((x) => x.contract_id === f.contractId || (linkedSub && x.submission_id === linkedSub.id))
+    .filter((x, i, arr) => arr.findIndex((y) => y.id === x.id) === i)
     .map((x) => `<tr>
       <td>${esc(docTypeLabel(x.doc_type))}</td>
       <td>${esc(x.file_name)}</td>
