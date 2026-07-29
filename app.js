@@ -811,7 +811,7 @@ function viewContracts() {
       <td><span class="tag ${contract.status === "draft" ? "tag-accent" : "tag-neutral"}">${esc(contract.status)}</span></td>
       <td>${ejariCell}</td>
       <td><span class="${renewal.status === "expired" ? "expiry-days is-overdue" : renewal.status === "due" ? "expiry-days" : "text-muted"}">${esc(renewalText)}</span></td>
-      <td style="white-space:nowrap">${canManage && contract.status === "draft" ? `<button class="btn btn-secondary btn-mini" data-editcontract="${contract.id}">Edit</button> ` : ""}<button class="btn btn-secondary btn-mini" data-files="${contract.id}">Files${fileCount(contract.id) ? ` (${fileCount(contract.id)})` : ""}</button> <button class="btn btn-primary btn-mini" data-printcontract="${contract.id}">View / print</button></td></tr>`;
+      <td style="white-space:nowrap">${canManage && contract.status === "draft" ? `<button class="btn btn-secondary btn-mini" data-editcontract="${contract.id}">Edit</button> <button class="btn btn-secondary btn-mini" data-delcontract="${contract.id}">Delete</button> ` : ""}<button class="btn btn-secondary btn-mini" data-files="${contract.id}">Files${fileCount(contract.id) ? ` (${fileCount(contract.id)})` : ""}</button> <button class="btn btn-primary btn-mini" data-printcontract="${contract.id}">View / print</button></td></tr>`;
   }).join("");
   return `<div>
     <div style="margin-bottom:20px;display:flex;justify-content:space-between;gap:16px;align-items:end;flex-wrap:wrap">
@@ -2665,7 +2665,7 @@ function viewSubmissions() {
       <td>${esc(showDate(s.moving_date))}</td>
       <td>${files ? `<span class="tag tag-neutral">${files} file${files === 1 ? "" : "s"}</span>` : `<span class="text-muted">none</span>`}</td>
       <td><span class="tag ${s.status === "submitted" ? "tag-accent" : "tag-neutral"}">${esc(SUB_STATUS[s.status] || s.status)}</span></td>
-      <td style="white-space:nowrap"><button class="btn btn-secondary btn-mini" data-viewsub="${s.id}">Open</button>${canReview && s.status !== "converted" ? ` <button class="btn btn-primary btn-mini" data-makecontract="${s.id}">Make contract</button>` : ""}</td>
+      <td style="white-space:nowrap"><button class="btn btn-secondary btn-mini" data-viewsub="${s.id}">Open</button>${canReview && s.status !== "converted" ? ` <button class="btn btn-primary btn-mini" data-makecontract="${s.id}">Make contract</button>` : ""}${canReview ? ` <button class="btn btn-secondary btn-mini" data-delsub="${s.id}">Delete</button>` : ""}</td>
     </tr>`;
   }).join("");
   const pending = state.submissions.filter((s) => s.status === "submitted").length;
@@ -3101,6 +3101,27 @@ function viewEjariHelp() {
     </div></div></div>`;
 }
 
+async function deleteContract(id) {
+  const c = state.contracts.find((x) => x.id === id);
+  if (!c || c.status !== "draft") return;
+  if (!window.confirm(`Delete draft contract ${c.contract_no || ""} (${c.tenant_name || "no tenant"})? Its attached files are removed too.`)) return;
+  const del = await supabase.from("contracts").delete().eq("id", id).select("id");
+  if (del.error) { window.alert("Could not delete: " + del.error.message); return; }
+  if (!(del.data || []).length) { window.alert("The database refused this delete — run the pending SQL (contracts delete policy)."); return; }
+  if (!await reloadAfterWrite(reloadContracts, "Contract deletion")) return;
+  render();
+}
+async function deleteSubmission(id) {
+  const sub = state.submissions.find((x) => x.id === id);
+  if (!sub) return;
+  if (!window.confirm(`Delete this submission from ${sub.submitted_by_name || "agent"}? Attached documents are removed too.`)) return;
+  const del = await supabase.from("deal_submissions").delete().eq("id", id).select("id");
+  if (del.error) { window.alert("Could not delete: " + del.error.message); return; }
+  if (!(del.data || []).length) { window.alert("The database refused this delete — run the pending SQL (submissions delete policy)."); return; }
+  if (!await reloadAfterWrite(reloadSubmissions, "Submission deletion")) return;
+  render();
+}
+
 // ── wiring ───────────────────────────────────────────────
 function wireScreen() {
   // Partial re-renders (search inputs etc.) replace <main> without re-running
@@ -3182,6 +3203,7 @@ function wireScreen() {
   root.querySelectorAll("[data-saverequest]").forEach((button) => button.onclick = () => saveRequestReview(button.closest("[data-requestrow]")));
   // contracts, addenda, renewal reminders, and Accounts notifications
   const newContract = document.getElementById("newcontract"); if (newContract) newContract.onclick = () => openContractForm();
+  root.querySelectorAll("[data-delcontract]").forEach((b) => b.onclick = () => deleteContract(b.dataset.delcontract));
   root.querySelectorAll("[data-editcontract]").forEach((button) => button.onclick = () => openContractForm(state.contracts.find((c) => c.id === button.dataset.editcontract)));
   root.querySelectorAll("[data-printcontract]").forEach((button) => button.onclick = () => { state.printContract = state.contracts.find((c) => c.id === button.dataset.printcontract) || null; render(); });
   root.querySelectorAll("[data-fulfilltask]").forEach((button) => button.onclick = () => fulfillAccountTask(button.closest("[data-accounttask]")));
@@ -3264,6 +3286,7 @@ function wireScreen() {
   };
   // deal submissions
   const newSub = document.getElementById("newsub"); if (newSub) newSub.onclick = () => { state.subForm = emptySubForm(); render(); };
+  root.querySelectorAll("[data-delsub]").forEach((b) => b.onclick = () => deleteSubmission(b.dataset.delsub));
   root.querySelectorAll("[data-viewsub]").forEach((b) => b.onclick = () => { state.subView = b.dataset.viewsub; render(); });
   root.querySelectorAll("[data-makecontract]").forEach((b) => b.onclick = () => makeContractFromSubmission(b.dataset.makecontract));
   root.querySelectorAll("[data-delfile]").forEach((b) => b.onclick = () => deleteContractFile(b.dataset.delfile));
