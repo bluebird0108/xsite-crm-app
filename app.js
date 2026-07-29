@@ -31,7 +31,7 @@ const state = {
   cbMonth: null, cbChannel: "All", cbQuery: "",
   dashQuery: "", activityDay: null,
   dealForm: null, pwForm: false, docForm: null, cashForm: null, requestForm: null,
-  contractForm: null, printContract: null, printInvoice: null,
+  contractForm: null, printContract: null, printInvoice: null, printReceipt: null,
   contactForm: null, cashMoveForm: null, filesFor: null, subForm: null, subView: null,
 };
 
@@ -83,7 +83,7 @@ function clearSensitiveState() {
   state.dealForm = null; state.pwForm = false; state.docForm = null;
   state.cashForm = null; state.requestForm = null; state.contractForm = null; state.printContract = null;
   state.contactForm = null; state.cashMoveForm = null;
-  state.printInvoice = null; state.filesFor = null; state.subForm = null;
+  state.printInvoice = null; state.printReceipt = null; state.filesFor = null; state.subForm = null;
   state.subView = null; state.ceForm = null;
 }
 const COLUMNS = {
@@ -459,7 +459,7 @@ function renderApp() {
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else if (roleIn("agent")) body = viewLedgers();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail() + viewCeModal();
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewReceiptPrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail() + viewCeModal();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
@@ -1423,6 +1423,7 @@ function viewInvoices() {
     <td>${statusTag(d)}</td><td>${esc(d.payment_method || "—")}</td>
     ${canEdit ? `<td><div class="row-actions">
       ${d.doc_type === "invoice" ? `<button class="btn btn-secondary btn-mini" data-invpdf="${d.id}">Invoice PDF</button>` : ""}
+      ${d.doc_type === "receipt" ? `<button class="btn btn-secondary btn-mini" data-rcptpdf="${d.id}">Receipt PDF</button>` : ""}
       ${d.doc_type === "invoice" && d.status === "pending" ? `<button class="btn btn-primary btn-mini" data-markpaid="${d.id}">Mark paid</button>` : ""}
       <button class="btn btn-secondary btn-mini" data-editdoc="${d.id}">Edit</button>
       <button class="btn btn-secondary btn-mini" data-deletedoc="${d.id}">Delete</button>
@@ -1711,6 +1712,7 @@ function invoiceDraftFor(doc) {
     quantity: d.quantity != null ? d.quantity : 1,
     unit_price: d.unit_price != null ? d.unit_price : (doc.amount ?? 0),
     vat_rate: d.vat_rate != null ? d.vat_rate : 5,
+    amount_paid: d.amount_paid != null ? d.amount_paid : null,
     signed: d.signed != null ? d.signed : true,
   };
 }
@@ -1727,6 +1729,10 @@ function viewInvoicePrint() {
   const subtotal = (Number(f.quantity) || 0) * (Number(f.unit_price) || 0);
   const vat = subtotal * (Number(f.vat_rate) || 0) / 100;
   const total = subtotal + vat;
+  // "Less Amount Paid": a paid invoice defaults to fully settled, like the
+  // reference document; still editable for part payments.
+  const paid = f.amount_paid != null && f.amount_paid !== "" ? Number(f.amount_paid) : (f.status === "paid" ? total : 0);
+  const due = total - paid;
   const inp = (id, val, extra = "") => `<input class="inv-in" id="iv_${id}" value="${esc(val)}" ${extra} ${canEdit ? "" : "readonly"}>`;
   const ta = (id, val) => `<textarea class="inv-in inv-ta" id="iv_${id}" rows="3" ${canEdit ? "" : "readonly"}>${esc(val)}</textarea>`;
   return `<div class="inv-print-shell" role="dialog" aria-modal="true" aria-label="Invoice preview" tabindex="-1">
@@ -1779,6 +1785,8 @@ function viewInvoicePrint() {
         <div class="inv-total-row"><span>Subtotal</span><strong id="iv_subtotal">${num2(subtotal)}</strong></div>
         <div class="inv-total-row"><span>TOTAL VAT ON SALES ${inp("vat_rate", f.vat_rate, 'type="number" step="0.01" style="width:56px;text-align:right;display:inline-block"')}%</span><strong id="iv_vat">${num2(vat)}</strong></div>
         <div class="inv-total-row is-grand"><span>TOTAL AED</span><strong id="iv_total">${num2(total)}</strong></div>
+        <div class="inv-total-row"><span>Less Amount Paid</span><strong id="iv_paid_show" style="display:inline-flex;align-items:center">${inp("amount_paid", paid, 'type="number" step="0.01" style="width:110px;text-align:right"')}</strong></div>
+        <div class="inv-total-row is-grand"><span>AMOUNT DUE AED</span><strong id="iv_due">${num2(due)}</strong></div>
       </div>
       <div class="inv-foot">
         <div class="inv-due"><strong>Due Date:</strong> ${inp("due_date", f.due_date, 'type="date" style="width:auto;display:inline-block"')}</div>
@@ -1800,16 +1808,18 @@ function invoiceRecalc() {
   const price = Number(g("unit_price")?.value) || 0;
   const rate = Number(g("vat_rate")?.value) || 0;
   const subtotal = qty * price, vat = subtotal * rate / 100, total = subtotal + vat;
+  const paid = Number(g("amount_paid")?.value) || 0;
   if (g("amount")) g("amount").textContent = num2(subtotal);
   if (g("subtotal")) g("subtotal").textContent = num2(subtotal);
   if (g("vat")) g("vat").textContent = num2(vat);
   if (g("total")) g("total").textContent = num2(total);
+  if (g("due")) g("due").textContent = num2(total - paid);
 }
 function readInvoiceForm() {
   const f = state.printInvoice;
   const g = (id) => document.getElementById("iv_" + id);
   ["invoice_number", "invoice_date", "due_date", "client_name", "client_address", "client_trn",
-   "reference", "agent", "buyer_name", "description", "quantity", "unit_price", "vat_rate"].forEach((k) => {
+   "reference", "agent", "buyer_name", "description", "quantity", "unit_price", "vat_rate", "amount_paid"].forEach((k) => {
     if (g(k)) f[k] = g(k).value;
   });
   const cb = document.getElementById("invsigned"); if (cb) f.signed = cb.checked;
@@ -1823,10 +1833,129 @@ async function saveInvoiceDraft() {
     client_name: f.client_name, client_address: f.client_address, client_trn: f.client_trn,
     reference: f.reference, agent: f.agent, buyer_name: f.buyer_name, description: f.description,
     quantity: Number(f.quantity) || 0, unit_price: Number(f.unit_price) || 0, vat_rate: Number(f.vat_rate) || 0,
+    amount_paid: f.amount_paid === "" || f.amount_paid == null ? null : Number(f.amount_paid),
     signed: !!f.signed,
   };
   const amount = details.quantity * details.unit_price;
   const { error } = await supabase.from("money_docs").update({ details, amount, client: f.client_name, doc_date: f.invoice_date }).eq("id", f.id);
+  if (error) { if (btn) { btn.disabled = false; btn.textContent = "Save draft"; } window.alert("Could not save: " + error.message); return; }
+  await reloadDocs();
+  if (btn) { btn.disabled = false; btn.textContent = "Saved ✓"; }
+}
+
+// ── receipt draft + print (matches the Xsite receipt layout) ──
+function receiptDraftFor(doc) {
+  const d = doc.details || {};
+  const deal = (state.deals.find((x) => x.group_id === doc.deal_group) || {});
+  // Best effort: pick up the invoice this payment settles from the same deal.
+  const linkedInvoice = state.docs.find((x) => x.doc_type === "invoice" && x.deal_group && x.deal_group === doc.deal_group);
+  const unit = deal.unit ? `Unit No ${deal.unit}` : "";
+  const refBuilding = [unit, deal.building, deal.area].filter(Boolean).join(", ");
+  return {
+    id: doc.id,
+    client_name: d.client_name || doc.client || "",
+    payment_date: d.payment_date || doc.doc_date || todayIso(),
+    sent_date: d.sent_date || doc.doc_date || todayIso(),
+    invoice_date: d.invoice_date || linkedInvoice?.doc_date || doc.doc_date || todayIso(),
+    invoice_ref: d.invoice_ref || linkedInvoice?.doc_no || "",
+    payment_reference: d.payment_reference || (refBuilding ? `Payment - ${refBuilding}` : (doc.description || "Payment")),
+    invoice_total: d.invoice_total != null ? d.invoice_total : (doc.amount ?? 0),
+    amount_paid: d.amount_paid != null ? d.amount_paid : (doc.amount ?? 0),
+  };
+}
+function openReceiptPrint(id) {
+  const doc = state.docs.find((x) => x.id === id);
+  if (!doc) return;
+  state.printReceipt = receiptDraftFor(doc);
+  render();
+}
+function viewReceiptPrint() {
+  const f = state.printReceipt;
+  if (!f) return "";
+  const canEdit = roleIn("owner", "accounts");
+  const invoiceTotal = Number(f.invoice_total) || 0;
+  const paid = Number(f.amount_paid) || 0;
+  const owing = invoiceTotal - paid;
+  const inp = (id, val, extra = "") => `<input class="inv-in" id="rc_${id}" value="${esc(val)}" ${extra} ${canEdit ? "" : "readonly"}>`;
+  const ta = (id, val) => `<textarea class="inv-in inv-ta" id="rc_${id}" rows="3" ${canEdit ? "" : "readonly"}>${esc(val)}</textarea>`;
+  return `<div class="inv-print-shell" role="dialog" aria-modal="true" aria-label="Receipt preview" tabindex="-1">
+    <div class="contract-print-toolbar inv-toolbar">
+      <div><strong>Receipt</strong><div>${esc(f.invoice_ref || "")}</div></div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="btn btn-secondary" id="rcclose">Back</button>
+        ${canEdit ? `<button class="btn btn-secondary" id="rcsave">Save draft</button>` : ""}
+        <button class="btn btn-primary" id="rcprint">Print / Save PDF</button>
+      </div>
+    </div>
+    <div class="inv-sheet">
+      <div class="inv-head">
+        <h1 class="inv-title">RECEIPT</h1>
+        <img class="inv-logo" src="./xsite-logo.png" alt="Xsite">
+      </div>
+      <div class="inv-meta">
+        <div class="inv-billto">
+          ${inp("client_name", f.client_name, 'placeholder="Client / company name" style="font-weight:700"')}
+        </div>
+        <div class="inv-fields">
+          <label class="inv-lbl">Payment Date</label>${inp("payment_date", f.payment_date, 'type="date"')}
+          <label class="inv-lbl">Sent Date</label>${inp("sent_date", f.sent_date, 'type="date"')}
+        </div>
+        <div class="inv-company">
+          <strong>${esc(XSITE_CO.name)}</strong>
+          ${XSITE_CO.addressLines.map((l) => `<div>${esc(l)}</div>`).join("")}
+          <div>${esc(XSITE_CO.trn)}</div>
+          <div>${esc(XSITE_CO.email)}</div>
+        </div>
+      </div>
+      <div class="rcpt-band"><span>Total AED paid</span><strong id="rc_band">${num2(paid)}</strong></div>
+      <table class="inv-items">
+        <thead><tr><th>Invoice Date</th><th>Reference</th><th>Payment Reference</th><th class="num">Invoice Total</th><th class="num">Amount Paid</th><th class="num">Still Owing</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>${inp("invoice_date", f.invoice_date, 'type="date" style="width:130px"')}</td>
+            <td>${inp("invoice_ref", f.invoice_ref, 'style="width:120px"')}</td>
+            <td>${ta("payment_reference", f.payment_reference)}</td>
+            <td class="num">${inp("invoice_total", f.invoice_total, 'type="number" step="0.01" style="width:110px;text-align:right"')}</td>
+            <td class="num">${inp("amount_paid", f.amount_paid, 'type="number" step="0.01" style="width:110px;text-align:right"')}</td>
+            <td class="num" id="rc_owing">${num2(owing)}</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr class="rcpt-total"><td></td><td></td><td class="num" style="font-weight:800">Total AED</td><td></td><td class="num" style="font-weight:800" id="rc_total_paid">${num2(paid)}</td><td class="num" style="font-weight:800" id="rc_total_owing">${num2(owing)}</td></tr>
+        </tfoot>
+      </table>
+      <div class="inv-registered">${esc(XSITE_CO.registered)}</div>
+    </div>
+  </div>`;
+}
+function receiptRecalc() {
+  const g = (id) => document.getElementById("rc_" + id);
+  const total = Number(g("invoice_total")?.value) || 0;
+  const paid = Number(g("amount_paid")?.value) || 0;
+  const owing = total - paid;
+  if (g("band")) g("band").textContent = num2(paid);
+  if (g("owing")) g("owing").textContent = num2(owing);
+  if (g("total_paid")) g("total_paid").textContent = num2(paid);
+  if (g("total_owing")) g("total_owing").textContent = num2(owing);
+}
+function readReceiptForm() {
+  const f = state.printReceipt;
+  const g = (id) => document.getElementById("rc_" + id);
+  ["client_name", "payment_date", "sent_date", "invoice_date", "invoice_ref",
+   "payment_reference", "invoice_total", "amount_paid"].forEach((k) => { if (g(k)) f[k] = g(k).value; });
+}
+async function saveReceiptDraft() {
+  readReceiptForm();
+  const f = state.printReceipt;
+  const btn = document.getElementById("rcsave"); if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  const details = {
+    client_name: f.client_name, payment_date: f.payment_date, sent_date: f.sent_date,
+    invoice_date: f.invoice_date, invoice_ref: f.invoice_ref, payment_reference: f.payment_reference,
+    invoice_total: Number(f.invoice_total) || 0, amount_paid: Number(f.amount_paid) || 0,
+  };
+  const { error } = await supabase.from("money_docs").update({
+    details, amount: details.amount_paid, client: f.client_name, doc_date: f.payment_date,
+  }).eq("id", f.id);
   if (error) { if (btn) { btn.disabled = false; btn.textContent = "Save draft"; } window.alert("Could not save: " + error.message); return; }
   await reloadDocs();
   if (btn) { btn.disabled = false; btn.textContent = "Saved ✓"; }
@@ -2858,6 +2987,15 @@ function wireScreen() {
   root.querySelectorAll("[data-deletedoc]").forEach((b) => b.onclick = () => deleteDoc(b.dataset.deletedoc));
   root.querySelectorAll("[data-markpaid]").forEach((b) => b.onclick = () => markPaid(b.dataset.markpaid));
   root.querySelectorAll("[data-invpdf]").forEach((b) => b.onclick = () => openInvoicePrint(b.dataset.invpdf));
+  root.querySelectorAll("[data-rcptpdf]").forEach((b) => b.onclick = () => openReceiptPrint(b.dataset.rcptpdf));
+  if (state.printReceipt) {
+    document.getElementById("rcclose").onclick = () => { state.printReceipt = null; render(); };
+    const rcSave = document.getElementById("rcsave"); if (rcSave) rcSave.onclick = saveReceiptDraft;
+    document.getElementById("rcprint").onclick = () => window.print();
+    ["invoice_total", "amount_paid"].forEach((id) => {
+      const el = document.getElementById("rc_" + id); if (el) el.oninput = receiptRecalc;
+    });
+  }
   if (state.printInvoice) {
     document.getElementById("invclose").onclick = () => { state.printInvoice = null; render(); };
     const invSave = document.getElementById("invsave"); if (invSave) invSave.onclick = saveInvoiceDraft;
@@ -3047,7 +3185,8 @@ function wireModals() {
   };
   document.onkeydown = (event) => {
     if (event.key !== "Escape") return;
-    if (state.printInvoice) { state.printInvoice = null; render(); }
+    if (state.printReceipt) { state.printReceipt = null; render(); }
+    else if (state.printInvoice) { state.printInvoice = null; render(); }
     else if (state.printContract) { state.printContract = null; render(); }
     else if (state.contractForm) { state.contractForm = null; render(); }
     else if (state.filesFor) { state.filesFor = null; render(); }
