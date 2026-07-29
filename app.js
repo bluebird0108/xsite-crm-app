@@ -2062,7 +2062,10 @@ function allLedgerNames() {
     if (!a.name) return;
     const n = normName(a.name);
     if (auth.has(n)) return;
-    const shadowed = authArr.some((f) => f.startsWith(n + " "));
+    // Shadowed when the short name appears as a run of whole words anywhere in a
+    // fuller staff name — start ("WAJAHAT ISRAR" ⊂ "WAJAHAT ISRAR HAJI…") or
+    // middle ("FARAZ HASSAN KAZMI" ⊂ "SYED FARAZ HASSAN KAZMI…").
+    const shadowed = authArr.some((f) => (" " + f + " ").includes(" " + n + " "));
     if (!shadowed) names.add(n);
   });
   return [...names].filter(Boolean).sort((a, b) => a.localeCompare(b));
