@@ -280,6 +280,9 @@ table.grid.wide { min-width: 1700px; }
 .activity-item { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .activity-item .tag { flex: 0 0 auto; }
 
+/* ── team activity (owner) ── */
+.activity-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--space-4); }
+
 /* ── dashboard global search ── */
 .dash-search { position: relative; margin-bottom: 20px; max-width: 560px; }
 .dash-search-results { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--color-neutral-100); border: 1px solid var(--color-neutral-300); border-radius: 10px; padding: 8px; box-shadow: var(--shadow-sm); }
