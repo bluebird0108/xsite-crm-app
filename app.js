@@ -862,7 +862,7 @@ function viewContractPrint() {
 // Owner role, so an admin cannot promote themselves or lock the owner out.
 function viewTeam() {
   const isOwner = roleIn("owner");
-  const agentNames = [...new Set(state.commission.map((r) => r.agent_name))].sort();
+  const agentNames = allLedgerNames();
   const assignable = isOwner ? ["pending", "agent", "accounts", "admin", "owner"] : ["pending", "agent", "accounts", "admin"];
   const roleOpts = (cur) => (assignable.includes(cur) ? assignable : [...assignable, cur])
     .map((r) => `<option value="${r}" ${r === cur ? "selected" : ""}>${r}</option>`).join("");
@@ -1720,9 +1720,19 @@ async function saveInvoiceDraft() {
 }
 
 // ── view: agent ledgers ──────────────────────────────────
+// Every name the business knows about — staff roster, imported agents, and
+// anyone with commission history. A staff member with no deals yet still shows
+// up (with a zero ledger) so they can be linked to a login straight away.
+function allLedgerNames() {
+  const names = new Set();
+  state.commission.forEach((r) => { if (r.agent_name) names.add(String(r.agent_name).trim().toUpperCase()); });
+  state.agents.forEach((a) => { if (a.name) names.add(String(a.name).trim().toUpperCase()); });
+  state.staff.forEach((x) => { if (x.name) names.add(String(x.name).trim().toUpperCase()); });
+  return [...names].filter(Boolean).sort((a, b) => a.localeCompare(b));
+}
 function ledgerAgentNames() {
   if (state.profile.role === "agent") return state.profile.agent_name ? [state.profile.agent_name] : [];
-  return [...new Set(state.commission.map((r) => r.agent_name))].sort();
+  return allLedgerNames();
 }
 function viewLedgers() {
   const names = ledgerAgentNames();
@@ -1749,7 +1759,7 @@ function viewLedgers() {
     <div class="sheet"><div class="sheet-hint">${esc(state.selectedAgent)} — ${monthLabel(state.ledgerMonth)} commission statement</div>
     <div class="table-wrap"><table class="grid wide">
       <thead><tr><th>Date</th><th>Third party</th><th>Agent 2</th><th>Type</th><th>Unit</th><th>Building</th><th>Area</th><th>Annual value</th><th>Total commission</th><th>Received</th><th>VAT</th><th>Ex-VAT</th><th>Agent business</th><th>Xsite share</th><th>Agent share</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr><td>${esc(showDate(r.entry_date, r.entry_date_raw))}</td><td class="tp-cell">${esc(r.third_party || "—")}</td><td>${esc(r.agent2 || "—")}</td><td>${esc(r.deal_type)}</td><td class="unit-cell">${esc(r.unit)}</td><td>${esc(r.building)}</td><td>${esc(r.area)}</td><td class="numeric">${money(r.annual_value)}</td><td class="numeric">${money(r.total_commission)}</td><td class="numeric">${money(r.received)}</td><td class="numeric">${money(r.vat)}</td><td class="numeric">${money(r.commission_ex_vat)}</td><td class="numeric">${money(r.agent_business)}</td><td class="numeric">${money(r.xsite_share)}</td><td class="numeric">${money(r.agent_share)}</td></tr>`).join("")}</tbody>
+      <tbody>${rows.length ? rows.map((r) => `<tr><td>${esc(showDate(r.entry_date, r.entry_date_raw))}</td><td class="tp-cell">${esc(r.third_party || "—")}</td><td>${esc(r.agent2 || "—")}</td><td>${esc(r.deal_type)}</td><td class="unit-cell">${esc(r.unit)}</td><td>${esc(r.building)}</td><td>${esc(r.area)}</td><td class="numeric">${money(r.annual_value)}</td><td class="numeric">${money(r.total_commission)}</td><td class="numeric">${money(r.received)}</td><td class="numeric">${money(r.vat)}</td><td class="numeric">${money(r.commission_ex_vat)}</td><td class="numeric">${money(r.agent_business)}</td><td class="numeric">${money(r.xsite_share)}</td><td class="numeric">${money(r.agent_share)}</td></tr>`).join("") : `<tr><td colspan="15"><div class="md-empty" style="border:0">No commission entries yet for ${esc(state.selectedAgent)} — this ledger starts at zero.</div></td></tr>`}</tbody>
     </table></div></div>` : `<div class="md-empty">No commission records to show.</div>`;
   return `
   <div>
