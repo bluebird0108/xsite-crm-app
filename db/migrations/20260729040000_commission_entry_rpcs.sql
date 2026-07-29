@@ -16,17 +16,22 @@ begin
   if p_entry_date is null then raise exception 'Date is required'; end if;
   v_month := to_char(p_entry_date, 'YYYY-MM');
   if p_id is null then
-    insert into public.commission_entries
-      (group_id, agent_name, entry_date, third_party, agent2, deal_type, unit, building, area,
-       annual_value, total_commission, received, vat, commission_ex_vat, agent_business,
-       xsite_share, agent_share, month)
-    values
-      (gen_random_uuid(), upper(trim(p_agent_name)), p_entry_date,
+    -- commission_entries.group_id references deal_groups: mint the parent row.
+    declare v_group uuid := gen_random_uuid();
+    begin
+      insert into public.deal_groups (id) values (v_group);
+      insert into public.commission_entries
+        (group_id, agent_name, entry_date, third_party, agent2, deal_type, unit, building, area,
+         annual_value, total_commission, received, vat, commission_ex_vat, agent_business,
+         xsite_share, agent_share, month)
+      values
+        (v_group, upper(trim(p_agent_name)), p_entry_date,
        coalesce(nullif(trim(p_third_party),''),'N/A'), coalesce(nullif(trim(p_agent2),''),'N/A'),
        p_deal_type, nullif(trim(p_unit),''), nullif(trim(p_building),''), nullif(trim(p_area),''),
-       p_annual_value, p_total_commission, p_received, p_vat, p_commission_ex_vat,
-       p_agent_business, p_xsite_share, p_agent_share, v_month)
-    returning id into v_id;
+         p_annual_value, p_total_commission, p_received, p_vat, p_commission_ex_vat,
+         p_agent_business, p_xsite_share, p_agent_share, v_month)
+      returning id into v_id;
+    end;
   else
     update public.commission_entries set
       agent_name = upper(trim(p_agent_name)), entry_date = p_entry_date,
@@ -54,3 +59,13 @@ begin
   delete from public.commission_entries where id = p_id;
 end; $$;
 grant execute on function public.delete_commission_entry(uuid) to authenticated;
+
+-- The client-side fallback (used until this file is applied) needs to mint the
+-- parent row directly, so allow owner/accounts to insert into deal_groups.
+alter table public.deal_groups enable row level security;
+drop policy if exists deal_groups_insert on public.deal_groups;
+create policy deal_groups_insert on public.deal_groups
+  for insert with check (public.app_role() in ('owner','accounts','admin'));
+drop policy if exists deal_groups_read on public.deal_groups;
+create policy deal_groups_read on public.deal_groups
+  for select using (public.app_role() in ('owner','accounts','admin','agent'));

@@ -22,7 +22,7 @@ const state = {
   agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [], requests: [], contracts: [], accountTasks: [],
   contacts: [], cashMovements: [], contractFiles: [], submissions: [],
   selectedAgent: null,
-  txQuery: "", txType: "All", ledgerQuery: "",
+  txQuery: "", txType: "All", ledgerQuery: "", accTab: "master",
   txMonth: null, ledgerMonth: null, ceMonth: null, ceQuery: "", ceForm: null,
   invMonth: null, invType: "All", invQuery: "",
   cashDate: null,
@@ -32,7 +32,7 @@ const state = {
   dashQuery: "", activityDay: null,
   dealForm: null, pwForm: false, docForm: null, cashForm: null, requestForm: null,
   contractForm: null, printContract: null, printInvoice: null, printReceipt: null,
-  contactForm: null, cashMoveForm: null, filesFor: null, subForm: null, subView: null,
+  contactForm: null, cashMoveForm: null, filesFor: null, subForm: null, subView: null, staffForm: null, ejariHelp: null,
 };
 
 // ── helpers ──────────────────────────────────────────────
@@ -84,6 +84,7 @@ function clearSensitiveState() {
   state.cashForm = null; state.requestForm = null; state.contractForm = null; state.printContract = null;
   state.contactForm = null; state.cashMoveForm = null;
   state.printInvoice = null; state.printReceipt = null; state.filesFor = null; state.subForm = null;
+  state.staffForm = null; state.ejariHelp = null;
   state.subView = null; state.ceForm = null;
 }
 const COLUMNS = {
@@ -427,9 +428,6 @@ function renderApp() {
     ${roleIn("owner", "admin") ? navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts") : ""}
     ${roleIn("owner", "admin") ? navLink("contacts", "Contacts") : ""}
     ${roleIn("owner", "accounts") ? navLink("transactions", "Transactions") : ""}
-    ${roleIn("owner", "accounts") ? navLink("invoices", "Invoices & Receipts") : ""}
-    ${roleIn("owner", "accounts") ? navLink("commission", "Commission Entry") : ""}
-    ${roleIn("owner", "accounts") ? navLink("cashbank", "Cash & Bank") : ""}
     ${roleIn("owner", "accounts", "agent") ? navLink("ledgers", roleIn("agent") ? "My Ledger" : "Agent Ledgers") : ""}
     ${roleIn("owner", "admin", "agent") ? navLink("submissions", newSubs ? `Submissions (${newSubs})` : "Submissions") : ""}
     ${roleIn("pending") ? "" : navLink("requests", pendingRequests ? `Requests (${pendingRequests})` : "Requests")}
@@ -447,11 +445,8 @@ function renderApp() {
   else if (roleIn("pending")) body = viewPending();
   else if (state.screen === "activity" && roleIn("owner")) body = viewTeamActivity();
   else if (state.screen === "contacts" && roleIn("owner", "admin")) body = viewContacts();
-  else if (state.screen === "transactions" && roleIn("owner", "accounts")) body = viewTransactions();
+  else if (["transactions", "invoices", "commission", "cashbank"].includes(state.screen) && roleIn("owner", "accounts")) body = viewAccountsHub();
   else if (state.screen === "contracts" && roleIn("owner", "admin")) body = viewContracts();
-  else if (state.screen === "invoices" && roleIn("owner", "accounts")) body = viewInvoices();
-  else if (state.screen === "commission" && roleIn("owner", "accounts")) body = viewCommissionEntry();
-  else if (state.screen === "cashbank" && roleIn("owner", "accounts")) body = viewCashBank();
   else if (state.screen === "ledgers" && roleIn("owner", "accounts", "agent")) body = viewLedgers();
   else if (state.screen === "submissions" && roleIn("owner", "admin", "agent")) body = viewSubmissions();
   else if (state.screen === "requests") body = viewRequests();
@@ -459,7 +454,7 @@ function renderApp() {
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else if (roleIn("agent")) body = viewLedgers();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewReceiptPrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail() + viewCeModal();
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewReceiptPrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail() + viewCeModal() + viewStaffModal() + viewEjariHelp();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
@@ -553,11 +548,15 @@ function viewStaff() {
       <td>${esc(s.name)}</td><td>${esc(s.job || "—")}</td><td>${esc(s.nationality || "—")}</td>
       <td>${esc(s.branch || "—")}</td><td>${esc(s.card_number || "—")}</td>
       <td><span class="${expClass}">${esc(expLabel)}</span></td>
-      <td>${s.birthday && isoRe.test(s.birthday) ? esc(showDate(s.birthday)) : "—"}</td></tr>`;
+      <td>${s.birthday && isoRe.test(s.birthday) ? esc(showDate(s.birthday)) : "—"}</td>
+      ${roleIn("owner", "admin") ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editstaff="${s.id}">Edit</button><button class="btn btn-secondary btn-mini" data-delstaff="${s.id}">Delete</button></div></td>` : ""}</tr>`;
   }).join("");
   return `
   <div>
-    <div style="margin-bottom:20px"><span class="card-kicker">Owner / HR</span><h1 style="margin-top:4px">Staff Directory</h1><p class="text-muted" style="margin:0">${state.staff.length} employees across Main and Branch offices.</p></div>
+    <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div><span class="card-kicker">Owner / HR</span><h1 style="margin-top:4px">Staff Directory</h1><p class="text-muted" style="margin:0">${state.staff.length} employees across Main and Branch offices.</p></div>
+      ${roleIn("owner", "admin") ? `<button class="btn btn-primary" id="newstaff">+ Add staff</button>` : ""}
+    </div>
     ${attention.length ? `
     <section class="md-section" style="margin-bottom:20px">
       <div class="md-section-header"><h3>Work permits requiring attention</h3><span class="tag tag-accent">${expired.length} expired · ${expiringSoon.length} within 60 days</span></div>
@@ -573,7 +572,7 @@ function viewStaff() {
     <div class="sheet">
       <div class="sheet-hint">Full roster — from official labour work-permit lists</div>
       <div class="table-wrap"><table class="grid" style="min-width:900px">
-        <thead><tr><th>Name</th><th>Job</th><th>Nationality</th><th>Branch</th><th>Work-permit card</th><th>Card expiry</th><th>Birthday</th></tr></thead>
+        <thead><tr><th>Name</th><th>Job</th><th>Nationality</th><th>Branch</th><th>Work-permit card</th><th>Card expiry</th><th>Birthday</th>${roleIn("owner", "admin") ? "<th></th>" : ""}</tr></thead>
         <tbody>${body || `<tr><td colspan="7"><div class="md-empty" style="border:0">No employees match.</div></td></tr>`}</tbody>
       </table></div>
     </div>
@@ -765,7 +764,7 @@ function viewContracts() {
     const ejariCell = contract.status !== "final"
       ? `<span class="text-muted">—</span>`
       : canEjari
-        ? `<button class="btn btn-mini ${ejariRegistered ? "btn-secondary" : "btn-primary"}" data-toggleejari="${contract.id}">${ejariRegistered ? "Registered" : "Register Ejari"}</button>`
+        ? `<button class="btn btn-mini ${ejariRegistered ? "btn-secondary" : "btn-primary"}" data-toggleejari="${contract.id}">${ejariRegistered ? "Registered" : "Register Ejari"}</button> <button class="btn btn-secondary btn-mini" data-ejariportal="${contract.id}" title="Open the Ejari portal with all values ready to copy">Portal</button>`
         : `<span class="tag ${ejariRegistered ? "tag-neutral" : "tag-accent"}">${ejariRegistered ? "Registered" : "Pending"}</span>`;
     return `<tr><td><strong>${esc(contract.contract_no)}</strong></td><td>${esc(dealLabelFor(contract.deal_group))}</td>
       <td>${esc(contract.landlord_name)} → ${esc(contract.tenant_name)}</td><td>${showDate(contract.start_date)} – ${showDate(contract.end_date)}</td>
@@ -1136,6 +1135,22 @@ function viewAgentDashboard() {
       <div class="md-kpi"><span class="card-kicker">My share</span><span class="md-kpi-value">${money(Math.round(share))}</span></div>
     </section>
   </div>`;
+}
+
+// ── accounts hub: register + money screens as one section with tabs ──
+const ACC_TABS = [["master", "Master Sheet"], ["invoices", "Invoices & Receipts"], ["commission", "Commission Entry"], ["cashbank", "Cash & Bank"]];
+function viewAccountsHub() {
+  // Old deep links (screen names) map onto the tab bar.
+  if (state.screen !== "transactions") {
+    state.accTab = state.screen === "invoices" ? "invoices" : state.screen === "commission" ? "commission" : "cashbank";
+    state.screen = "transactions";
+  }
+  const tabs = ACC_TABS.map(([k, l]) => `<button class="tab ${state.accTab === k ? "is-active" : ""}" data-acctab="${k}">${l}</button>`).join("");
+  const body = state.accTab === "invoices" ? viewInvoices()
+    : state.accTab === "commission" ? viewCommissionEntry()
+    : state.accTab === "cashbank" ? viewCashBank()
+    : viewTransactions();
+  return `<div><div class="tabs acc-tabs" style="margin-bottom:18px">${tabs}</div>${body}</div>`;
 }
 
 // ── view: transactions register ──────────────────────────
@@ -1539,7 +1554,7 @@ async function saveDoc() {
   if (f.id) {
     ({ error } = await supabase.from("money_docs").update(rec).eq("id", f.id));
   } else {
-    ({ error } = await supabase.rpc("create_money_doc", {
+    const rpc = await supabase.rpc("create_money_doc", {
       p_doc_type: rec.doc_type,
       p_deal_group: rec.deal_group,
       p_doc_date: rec.doc_date,
@@ -1548,7 +1563,20 @@ async function saveDoc() {
       p_amount: rec.amount,
       p_payment_method: rec.payment_method,
       p_status: rec.status,
-    }));
+    });
+    error = rpc.error;
+    // The database function predates optional deals and refuses a blank deal
+    // group; insert directly with the next number in the same series.
+    if (error && !rec.deal_group && /deal group|deal_group|valid deal/i.test(error.message)) {
+      const prefix = rec.doc_type === "invoice" ? "INV-" : "RCT-";
+      let max = 0, width = 3;
+      state.docs.forEach((d) => {
+        const m = /^([A-Z]+-)(\d+)$/.exec(d.doc_no || "");
+        if (m && m[1] === prefix) { max = Math.max(max, Number(m[2])); width = Math.max(width, m[2].length); }
+      });
+      const doc_no = prefix + String(max + 1).padStart(width, "0");
+      ({ error } = await supabase.from("money_docs").insert({ ...rec, doc_no }));
+    }
   }
   if (error) { msgEl.textContent = error.message; btn.disabled = false; btn.textContent = "Save"; return; }
   if (!await reloadAfterWrite(reloadDocs, "Document")) return;
@@ -2422,8 +2450,8 @@ function viewTeamActivity() {
   const days = [...new Set(entries.map((e) => e.day).filter(Boolean))].sort().reverse();
   const day = state.activityDay && days.includes(state.activityDay) ? state.activityDay : (days[0] || todayIso());
   const dayEntries = entries.filter((e) => e.day === day);
-  // Everyone who can do work in the system, so idle staff still appear.
-  const workers = state.team.filter((t) => ["admin", "accounts", "owner"].includes(t.role));
+  // Working staff only (admin + accounts) — owners oversee, they don't get a card.
+  const workers = state.team.filter((t) => ["admin", "accounts"].includes(t.role));
   const cards = workers.map((w) => {
     const mine = dayEntries.filter((e) => e.userId === w.id);
     const byDept = {};
@@ -2903,7 +2931,9 @@ async function saveCommissionEntry() {
   };
   let error = null;
   const rpc = await supabase.rpc("save_commission_entry", args);
-  if (rpc.error && /function|does not exist|schema cache/i.test(rpc.error.message)) {
+  // Fall back when the function is missing OR when it carries the old bug of
+  // minting a group_id without its deal_groups parent (FK violation).
+  if (rpc.error && /function|does not exist|schema cache|foreign key|deal_groups|group_id/i.test(rpc.error.message)) {
     const row = {
       agent_name: args.p_agent_name, entry_date: args.p_entry_date, month: args.p_entry_date.slice(0, 7),
       third_party: args.p_third_party || "N/A", agent2: args.p_agent2 || "N/A", deal_type: args.p_deal_type,
@@ -2913,7 +2943,16 @@ async function saveCommissionEntry() {
       xsite_share: args.p_xsite_share, agent_share: args.p_agent_share,
     };
     if (f.id) ({ error } = await supabase.from("commission_entries").update(row).eq("id", f.id));
-    else ({ error } = await supabase.from("commission_entries").insert({ ...row, group_id: crypto.randomUUID() }));
+    else {
+      // group_id references deal_groups, so mint the parent row first.
+      const gid = crypto.randomUUID();
+      const parent = await supabase.from("deal_groups").insert({ id: gid });
+      if (parent.error) {
+        error = { message: "Commission entries need the database update (db/migrations/…040000) — ask the owner to run it. (" + parent.error.message + ")" };
+      } else {
+        ({ error } = await supabase.from("commission_entries").insert({ ...row, group_id: gid }));
+      }
+    }
   } else error = rpc.error;
   if (error) { msg.textContent = error.message; btn.disabled = false; btn.textContent = f.id ? "Save changes" : "Save entry"; return; }
   if (!await reloadAfterWrite(reloadDeals, "Commission entry")) return;
@@ -2935,6 +2974,90 @@ async function deleteCommissionEntry(id) {
   render();
 }
 
+// ── staff add / edit / delete (owner + admin) ────────────
+function emptyStaffForm() {
+  return { id: null, name: "", job: "Sales Officer", nationality: "", branch: "Main", card_number: "", card_expiry: "", birthday: "", msg: "" };
+}
+function staffFormFromRow(r) {
+  return { id: r.id, name: r.name || "", job: r.job || "", nationality: r.nationality || "", branch: r.branch || "Main",
+    card_number: r.card_number || "", card_expiry: r.card_expiry || "", birthday: r.birthday || "", msg: "" };
+}
+function viewStaffModal() {
+  const f = state.staffForm;
+  if (!f) return "";
+  const fld = (id, label, type = "text", extra = "") =>
+    `<div class="field"><label for="sf_${id}">${label}</label><input class="input" id="sf_${id}" type="${type}" value="${esc(f[id] ?? "")}" ${extra}></div>`;
+  return `<div class="modal-backdrop"><div class="modal" style="width:min(620px,100%)" role="dialog" aria-labelledby="stafftitle">
+    <div class="modal-head"><h3 id="stafftitle">${f.id ? "Edit staff member" : "Add staff member"}</h3><button class="modal-close" id="staffclose" aria-label="Close">×</button></div>
+    <div class="modal-body">
+      <div class="form-grid" style="grid-template-columns:1fr 1fr">
+        <div class="field" style="grid-column:1/-1"><label for="sf_name">Full name</label><input class="input" id="sf_name" maxlength="200" value="${esc(f.name)}"></div>
+        ${fld("job", "Job title")}${fld("nationality", "Nationality")}
+        <div class="field"><label for="sf_branch">Branch</label><select class="input" id="sf_branch"><option ${f.branch === "Main" ? "selected" : ""}>Main</option><option ${f.branch === "Branch" ? "selected" : ""}>Branch</option></select></div>
+        ${fld("card_number", "Work-permit card no.")}${fld("card_expiry", "Card expiry", "date")}${fld("birthday", "Birthday", "date")}
+      </div>
+      <div class="modal-actions"><span class="form-msg" id="staffmsg">${esc(f.msg || "")}</span>
+        <button class="btn btn-secondary" id="staffcancel">Cancel</button>
+        <button class="btn btn-primary" id="staffsave">${f.id ? "Save changes" : "Add staff"}</button></div>
+    </div></div></div>`;
+}
+async function saveStaff() {
+  const f = state.staffForm;
+  const g = (id) => document.getElementById("sf_" + id).value;
+  const msg = document.getElementById("staffmsg");
+  if (g("name").trim().length < 2) { msg.textContent = "Enter the staff member's name."; return; }
+  const btn = document.getElementById("staffsave"); btn.disabled = true; btn.textContent = "Saving…";
+  const row = { name: g("name").trim().toUpperCase(), job: g("job").trim() || null, nationality: g("nationality").trim() || null,
+    branch: g("branch"), card_number: g("card_number").trim() || null,
+    card_expiry: g("card_expiry") || null, birthday: g("birthday") || null };
+  let error;
+  if (f.id) ({ error } = await supabase.from("staff").update(row).eq("id", f.id));
+  else ({ error } = await supabase.from("staff").insert(row));
+  if (error) { msg.textContent = error.message; btn.disabled = false; btn.textContent = f.id ? "Save changes" : "Add staff"; return; }
+  if (!await reloadAfterWrite(async () => { const r = await fetchAllSafe("staff", "name", true, true); state.staff = requireData(r, "staff"); }, "Staff")) return;
+  state.staffForm = null; render();
+}
+async function deleteStaff(id) {
+  const r = state.staff.find((x) => x.id === id);
+  if (!r || !window.confirm(`Remove ${r.name} from the staff directory?`)) return;
+  const { error } = await supabase.from("staff").delete().eq("id", id);
+  if (error) { window.alert("Could not remove: " + error.message); return; }
+  if (!await reloadAfterWrite(async () => { const res = await fetchAllSafe("staff", "name", true, true); state.staff = requireData(res, "staff"); }, "Staff removal")) return;
+  render();
+}
+
+// ── Ejari portal helper ──────────────────────────────────
+// Browsers cannot type into another website (the portal is a different origin,
+// and cross-site scripting like that is blocked by design), so the next best
+// thing: open the portal and put every value one click away.
+function viewEjariHelp() {
+  const c = state.ejariHelp ? state.contracts.find((x) => x.id === state.ejariHelp) : null;
+  if (!c) return "";
+  const d = c.details || {};
+  const rows = [
+    ["Lessor / owner name", c.landlord_name], ["Lessor Emirates ID", d.lessorEmiratesId], ["Lessor email", d.lessorEmail], ["Owner phone", c.owner_phone],
+    ["Tenant name", c.tenant_name], ["Tenant Emirates ID", d.tenantEmiratesId], ["Tenant email", d.tenantEmail], ["Tenant phone", c.tenant_phone],
+    ["Building", d.buildingName], ["Unit / property no.", d.propertyNo], ["Plot no.", d.plotNo], ["Makani no.", d.makaniNo],
+    ["DEWA premises no.", d.premisesNo], ["Location", d.location], ["Area (sq.m)", d.propertyArea], ["Unit type", d.unitType],
+    ["Annual rent", c.annual_rent], ["Contract value", d.contractValue], ["Security deposit", c.security_deposit],
+    ["Start date", c.start_date], ["End date", c.end_date], ["Payment mode", c.payment_mode],
+  ].filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== "");
+  const body = rows.map(([k, v]) => `<tr><td style="white-space:nowrap">${esc(k)}</td><td><strong>${esc(String(v))}</strong></td>
+    <td><button class="btn btn-secondary btn-mini" data-copyval="${esc(String(v))}">Copy</button></td></tr>`).join("");
+  return `<div class="modal-backdrop"><div class="modal" style="width:min(720px,100%)" role="dialog" aria-labelledby="ejarititle">
+    <div class="modal-head"><h3 id="ejarititle">Ejari filing — ${esc(c.contract_no || "contract")}</h3><button class="modal-close" id="ejariclose" aria-label="Close">×</button></div>
+    <div class="modal-body">
+      <p class="text-muted" style="font-size:12px;margin-top:0">The Ejari portal opened in a new tab. Websites cannot fill each other's forms (blocked by browser security), so copy each value below with one click as you go.</p>
+      <div class="table-wrap" style="max-height:55vh;overflow-y:auto"><table class="grid">
+        <thead><tr><th>Field</th><th>Value</th><th></th></tr></thead><tbody>${body}</tbody>
+      </table></div>
+      <div class="modal-actions">
+        <a class="btn btn-secondary" href="https://ejari.dubailand.gov.ae/rev" target="_blank" rel="noopener">Re-open Ejari portal</a>
+        <button class="btn btn-primary" id="ejaridone">Done</button>
+      </div>
+    </div></div></div>`;
+}
+
 // ── wiring ───────────────────────────────────────────────
 function wireScreen() {
   // Partial re-renders (search inputs etc.) replace <main> without re-running
@@ -2947,6 +3070,7 @@ function wireScreen() {
     catch (error) { state.fatalError = error.message; }
     render();
   };
+  root.querySelectorAll("[data-acctab]").forEach((b) => b.onclick = () => { state.accTab = b.dataset.acctab; render(); });
   const txq = document.getElementById("txq");
   if (txq) txq.oninput = () => { state.txQuery = txq.value; rerenderTx(); };
   root.querySelectorAll("[data-txtype]").forEach((b) => b.onclick = () => { state.txType = b.dataset.txtype; rerenderTx(); });
@@ -2974,7 +3098,7 @@ function wireScreen() {
   const invq = document.getElementById("invq");
   if (invq) invq.oninput = () => {
     state.invQuery = invq.value;
-    const main = root.querySelector("main"); main.innerHTML = viewInvoices(); wireScreen();
+    const main = root.querySelector("main"); main.innerHTML = viewAccountsHub(); wireScreen();
     const el = document.getElementById("invq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
   };
   const ndoc = document.getElementById("newdoc");
@@ -3057,9 +3181,25 @@ function wireScreen() {
   const cbq = document.getElementById("cbq");
   if (cbq) cbq.oninput = () => {
     state.cbQuery = cbq.value;
-    const main = root.querySelector("main"); main.innerHTML = viewCashBank(); wireScreen();
+    const main = root.querySelector("main"); main.innerHTML = viewAccountsHub(); wireScreen();
     const el = document.getElementById("cbq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
   };
+  // staff add/edit/delete
+  const newStaff = document.getElementById("newstaff"); if (newStaff) newStaff.onclick = () => { state.staffForm = emptyStaffForm(); render(); };
+  root.querySelectorAll("[data-editstaff]").forEach((b) => b.onclick = () => {
+    const r = state.staff.find((x) => x.id === b.dataset.editstaff);
+    if (r) { state.staffForm = staffFormFromRow(r); render(); }
+  });
+  root.querySelectorAll("[data-delstaff]").forEach((b) => b.onclick = () => deleteStaff(b.dataset.delstaff));
+  // ejari portal helper
+  root.querySelectorAll("[data-ejariportal]").forEach((b) => b.onclick = () => {
+    window.open("https://ejari.dubailand.gov.ae/rev", "_blank", "noopener");
+    state.ejariHelp = b.dataset.ejariportal; render();
+  });
+  root.querySelectorAll("[data-copyval]").forEach((b) => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copyval); b.textContent = "Copied ✓"; setTimeout(() => { b.textContent = "Copy"; }, 1200); }
+    catch { window.prompt("Copy this value:", b.dataset.copyval); }
+  });
   // contracts — Ejari toggle
   root.querySelectorAll("[data-toggleejari]").forEach((b) => b.onclick = () => toggleEjari(b.dataset.toggleejari));
   // contract documents
@@ -3076,7 +3216,7 @@ function wireScreen() {
   const ceq = document.getElementById("ceq");
   if (ceq) ceq.oninput = () => {
     state.ceQuery = ceq.value;
-    const main = root.querySelector("main"); main.innerHTML = viewCommissionEntry(); wireScreen();
+    const main = root.querySelector("main"); main.innerHTML = viewAccountsHub(); wireScreen();
     const el = document.getElementById("ceq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
   };
   // deal submissions
@@ -3156,6 +3296,13 @@ function wireModals() {
   // contract documents modal
   const filesClose = document.getElementById("filesclose"); if (filesClose) filesClose.onclick = () => { state.filesFor = null; render(); };
   const fileUpload = document.getElementById("fu_upload"); if (fileUpload) fileUpload.onclick = uploadContractFile;
+  // staff modal
+  const staffClose = document.getElementById("staffclose"); if (staffClose) staffClose.onclick = () => { state.staffForm = null; render(); };
+  const staffCancel = document.getElementById("staffcancel"); if (staffCancel) staffCancel.onclick = () => { state.staffForm = null; render(); };
+  const staffSave = document.getElementById("staffsave"); if (staffSave) staffSave.onclick = saveStaff;
+  // ejari helper modal
+  const ejClose = document.getElementById("ejariclose"); if (ejClose) ejClose.onclick = () => { state.ejariHelp = null; render(); };
+  const ejDone = document.getElementById("ejaridone"); if (ejDone) ejDone.onclick = () => { state.ejariHelp = null; render(); };
   // commission entry modal
   const ceClose = document.getElementById("ceclose"); if (ceClose) ceClose.onclick = () => { state.ceForm = null; render(); };
   const ceCancel = document.getElementById("cecancel"); if (ceCancel) ceCancel.onclick = () => { state.ceForm = null; render(); };
@@ -3191,6 +3338,8 @@ function wireModals() {
     else if (state.contractForm) { state.contractForm = null; render(); }
     else if (state.filesFor) { state.filesFor = null; render(); }
     else if (state.ceForm) { state.ceForm = null; render(); }
+    else if (state.staffForm) { state.staffForm = null; render(); }
+    else if (state.ejariHelp) { state.ejariHelp = null; render(); }
     else if (state.subForm) { state.subForm = null; render(); }
     else if (state.subView) { state.subView = null; render(); }
     else if (state.dealForm) { state.dealForm = null; render(); }
@@ -3206,7 +3355,7 @@ function wireModals() {
 }
 function rerenderTx() {
   const main = root.querySelector("main"); const focus = document.activeElement === document.getElementById("txq");
-  main.innerHTML = viewTransactions(); wireScreen();
+  main.innerHTML = viewAccountsHub(); wireScreen();
   if (focus) { const el = document.getElementById("txq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
 }
 function rerenderLedgers() {
