@@ -304,6 +304,12 @@ table.grid.wide { min-width: 1700px; }
 .rcpt-band { width: 340px; margin: 8px 0 26px auto; padding: 8px 4px; display: flex; justify-content: space-between; gap: 12px; border-top: 1.5px solid #1a1a1a; border-bottom: 1.5px solid #1a1a1a; font-size: 14px; }
 .rcpt-total td { border-top: 1.5px solid #1a1a1a; padding: 8px 4px; }
 
+/* ── addendum clause removal ── */
+.clause-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 4px 14px; margin-top: 6px; }
+.clause-check { display: flex; align-items: flex-start; gap: 7px; font-size: 12px; font-weight: 400; cursor: pointer; }
+.clause-check input { margin-top: 2px; flex: 0 0 auto; }
+.clause-whiteout { position: absolute; left: 1.5%; width: 96.5%; background: #fff; }
+
 @media print {
   @page { size: A4; margin: 0; }
   body { background: #fff; }
