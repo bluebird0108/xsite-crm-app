@@ -23,7 +23,7 @@ const state = {
   contacts: [], cashMovements: [], contractFiles: [], submissions: [],
   selectedAgent: null,
   txQuery: "", txType: "All", ledgerQuery: "",
-  txMonth: null, ledgerMonth: null,
+  txMonth: null, ledgerMonth: null, ceMonth: null, ceQuery: "", ceForm: null,
   invMonth: null, invType: "All", invQuery: "",
   cashDate: null,
   staffQuery: "", staffBranch: "All", requestStatus: "All",
@@ -405,6 +405,7 @@ function renderApp() {
     ${roleIn("owner", "admin") ? navLink("contacts", "Contacts") : ""}
     ${roleIn("owner", "accounts") ? navLink("transactions", "Transactions") : ""}
     ${roleIn("owner", "accounts") ? navLink("invoices", "Invoices & Receipts") : ""}
+    ${roleIn("owner", "accounts") ? navLink("commission", "Commission Entry") : ""}
     ${roleIn("owner", "accounts") ? navLink("cashbank", "Cash & Bank") : ""}
     ${roleIn("owner", "accounts", "agent") ? navLink("ledgers", roleIn("agent") ? "My Ledger" : "Agent Ledgers") : ""}
     ${roleIn("owner", "admin", "agent") ? navLink("submissions", newSubs ? `Submissions (${newSubs})` : "Submissions") : ""}
@@ -426,6 +427,7 @@ function renderApp() {
   else if (state.screen === "transactions" && roleIn("owner", "accounts")) body = viewTransactions();
   else if (state.screen === "contracts" && roleIn("owner", "admin")) body = viewContracts();
   else if (state.screen === "invoices" && roleIn("owner", "accounts")) body = viewInvoices();
+  else if (state.screen === "commission" && roleIn("owner", "accounts")) body = viewCommissionEntry();
   else if (state.screen === "cashbank" && roleIn("owner", "accounts")) body = viewCashBank();
   else if (state.screen === "ledgers" && roleIn("owner", "accounts", "agent")) body = viewLedgers();
   else if (state.screen === "submissions" && roleIn("owner", "admin", "agent")) body = viewSubmissions();
@@ -434,7 +436,7 @@ function renderApp() {
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else if (roleIn("agent")) body = viewLedgers();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail();
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail() + viewCeModal();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
@@ -2574,6 +2576,175 @@ function makeContractFromSubmission(id) {
   render();
 }
 
+// ── commission entry (Accounts posts straight to a ledger) ──
+// Deals recorded in Transactions already mirror into the ledgers. This screen
+// is for the entries that arrive outside a register deal — corrections,
+// referrals, and payouts Accounts needs to post directly.
+function viewCommissionEntry() {
+  const months = availableMonths(state.commission, "month");
+  const monthTabs = months.map((m) => `<button class="tab ${state.ceMonth === m ? "is-active" : ""}" data-cemonth="${m}">${monthLabel(m)}</button>`).join("");
+  const q = state.ceQuery.trim().toLowerCase();
+  const rows = state.commission.filter((r) =>
+    (!state.ceMonth || r.month === state.ceMonth) &&
+    (!q || [r.agent_name, r.unit, r.building, r.area, r.third_party, r.deal_type].join(" ").toLowerCase().includes(q)));
+  const sum = (k) => rows.reduce((acc, r) => acc + (+r[k] || 0), 0);
+  const body = rows.map((r) => `<tr>
+    <td>${esc(showDate(r.entry_date, r.entry_date_raw))}</td>
+    <td><strong>${esc(r.agent_name)}</strong></td>
+    <td>${esc(r.deal_type || "—")}</td>
+    <td>${esc([r.unit, r.building].filter(Boolean).join(" ") || "—")}</td>
+    <td class="tp-cell">${esc(r.third_party && r.third_party !== "N/A" ? r.third_party : "—")}</td>
+    <td class="numeric">${money(r.total_commission)}</td>
+    <td class="numeric">${money(r.received)}</td>
+    <td class="numeric">${money(r.vat)}</td>
+    <td class="numeric">${money(r.xsite_share)}</td>
+    <td class="numeric">${money(r.agent_share)}</td>
+    <td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editce="${r.id}">Edit</button><button class="btn btn-secondary btn-mini" data-delce="${r.id}">Delete</button></div></td>
+  </tr>`).join("");
+  return `<div>
+    <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div><span class="card-kicker">Accounts / Commissions</span><h1 style="margin-top:4px">Commission Entry</h1>
+      <p class="text-muted" style="margin:0">Post commission straight to an agent's ledger — ${monthLabel(state.ceMonth)}.</p></div>
+      <button class="btn btn-primary" id="newce">+ New commission entry</button>
+    </div>
+    <section class="md-kpi-grid" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:20px">
+      <div class="md-kpi is-accent"><span class="card-kicker">Entries</span><span class="md-kpi-value">${rows.length}</span></div>
+      <div class="md-kpi"><span class="card-kicker">Received</span><span class="md-kpi-value">${money(Math.round(sum("received")))}</span></div>
+      <div class="md-kpi"><span class="card-kicker">Xsite share</span><span class="md-kpi-value">${money(Math.round(sum("xsite_share")))}</span></div>
+      <div class="md-kpi"><span class="card-kicker">Agent share</span><span class="md-kpi-value">${money(Math.round(sum("agent_share")))}</span></div>
+    </section>
+    <div class="tx-toolbar">
+      ${months.length ? `<div class="tabs">${monthTabs}</div>` : ""}
+      <input class="input" id="ceq" type="search" placeholder="Search agent, unit, building, third party…" value="${esc(state.ceQuery)}">
+      <span class="text-muted" style="font-size:12px">${rows.length} entries</span>
+    </div>
+    <div class="sheet"><div class="sheet-hint">Entries feed straight into Agent Ledgers</div>
+      <div class="table-wrap"><table class="grid" style="min-width:1100px">
+        <thead><tr><th>Date</th><th>Agent</th><th>Type</th><th>Property</th><th>Third party</th><th>Total commission</th><th>Received</th><th>VAT</th><th>Xsite share</th><th>Agent share</th><th></th></tr></thead>
+        <tbody>${body || `<tr><td colspan="11"><div class="md-empty" style="border:0">No commission entries in ${monthLabel(state.ceMonth)}.</div></td></tr>`}</tbody>
+      </table></div>
+    </div>
+  </div>`;
+}
+
+function emptyCeForm() {
+  return { id: null, agent_name: "", agent2: "", entry_date: todayIso(), deal_type: "Rent", third_party: "",
+    unit: "", building: "", area: "", annual_value: "", total_commission: "", received: "",
+    vat: "", commission_ex_vat: "", agent_business: "", xsite_share: "", agent_share: "", msg: "" };
+}
+function ceFormFromRow(r) {
+  return { id: r.id, agent_name: r.agent_name || "", agent2: r.agent2 === "N/A" ? "" : (r.agent2 || ""),
+    entry_date: r.entry_date || todayIso(), deal_type: r.deal_type || "Rent",
+    third_party: r.third_party === "N/A" ? "" : (r.third_party || ""),
+    unit: r.unit || "", building: r.building || "", area: r.area || "", annual_value: r.annual_value ?? "",
+    total_commission: r.total_commission ?? "", received: r.received ?? "", vat: r.vat ?? "",
+    commission_ex_vat: r.commission_ex_vat ?? "", agent_business: r.agent_business ?? "",
+    xsite_share: r.xsite_share ?? "", agent_share: r.agent_share ?? "", msg: "" };
+}
+
+function viewCeModal() {
+  const f = state.ceForm;
+  if (!f) return "";
+  const names = allLedgerNames();
+  const dl = `<datalist id="celedger">${names.map((n) => `<option value="${esc(n)}">`).join("")}</datalist>`;
+  const typeOpts = ["Rent", "Renewal", "Off Plan", "Secondary Sale"].map((t) => `<option ${f.deal_type === t ? "selected" : ""}>${t}</option>`).join("");
+  const fld = (id, label, type = "text", extra = "") =>
+    `<div class="field"><label for="ce_${id}">${label}</label><input class="input" id="ce_${id}" type="${type}" value="${esc(f[id] ?? "")}" ${extra}></div>`;
+  return `<div class="modal-backdrop"><div class="modal" style="width:min(760px,100%)" role="dialog" aria-labelledby="cetitle">
+    <div class="modal-head"><h3 id="cetitle">${f.id ? "Edit commission entry" : "New commission entry"}</h3><button class="modal-close" id="ceclose" aria-label="Close">×</button></div>
+    <div class="modal-body">${dl}
+      <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr">
+        <div class="field"><label for="ce_agent_name">Agent (ledger)</label><input class="input" id="ce_agent_name" list="celedger" value="${esc(f.agent_name)}" placeholder="Type to search"></div>
+        ${fld("entry_date", "Date", "date")}
+        <div class="field"><label for="ce_deal_type">Type</label><select class="input" id="ce_deal_type">${typeOpts}</select></div>
+        ${fld("unit", "Unit")}${fld("building", "Building")}${fld("area", "Area")}
+        <div class="field" style="grid-column:1/-1"><label for="ce_third_party">Third party (optional)</label><input class="input" id="ce_third_party" value="${esc(f.third_party)}"></div>
+        <div class="field"><label for="ce_agent2">Agent 2 (shared — halves the agent business)</label><input class="input" id="ce_agent2" list="celedger" value="${esc(f.agent2)}"></div>
+        ${fld("annual_value", "Annual value / price", "number", 'min="0" step="0.01"')}
+        <div class="form-section" style="grid-column:1/-1">Commission — auto-calculated, editable</div>
+        ${fld("total_commission", "Total commission", "number", 'min="0" step="0.01"')}
+        ${fld("received", "Received", "number", 'min="0" step="0.01"')}
+        ${fld("vat", "VAT @ 5%", "number", 'step="0.01"')}
+        ${fld("commission_ex_vat", "Ex-VAT", "number", 'step="0.01"')}
+        ${fld("agent_business", "Agent business", "number", 'step="0.01"')}
+        <div class="field"></div>
+        ${fld("xsite_share", "Xsite 50%", "number", 'step="0.01"')}
+        ${fld("agent_share", "Agent 50%", "number", 'step="0.01"')}
+      </div>
+      <div class="modal-actions"><span class="form-msg" id="cemsg">${esc(f.msg || "")}</span>
+        <button class="btn btn-secondary" id="cecancel">Cancel</button>
+        <button class="btn btn-primary" id="cesave">${f.id ? "Save changes" : "Save entry"}</button></div>
+    </div></div></div>`;
+}
+
+function collectCeForm() {
+  const f = state.ceForm; if (!f) return;
+  ["agent_name","agent2","entry_date","deal_type","third_party","unit","building","area","annual_value",
+   "total_commission","received","vat","commission_ex_vat","agent_business","xsite_share","agent_share"]
+    .forEach((k) => { const el = document.getElementById("ce_" + k); if (el) f[k] = el.value; });
+}
+function ceAutoMath() {
+  collectCeForm();
+  const f = state.ceForm;
+  const calc = calculateDealCommission(f.total_commission, f.received, !!String(f.agent2).trim());
+  if (!calc) return;
+  f.vat = calc.vat; f.commission_ex_vat = calc.commissionExVat; f.agent_business = calc.agentBusiness;
+  f.xsite_share = calc.companyShare; f.agent_share = calc.agentShare;
+  ["vat","commission_ex_vat","agent_business","xsite_share","agent_share"].forEach((k) => {
+    const el = document.getElementById("ce_" + k); if (el) el.value = f[k];
+  });
+}
+
+async function saveCommissionEntry() {
+  collectCeForm();
+  const f = state.ceForm;
+  const msg = document.getElementById("cemsg");
+  const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
+  if (!String(f.agent_name).trim()) { msg.textContent = "Choose the agent whose ledger this belongs to."; return; }
+  if (!f.entry_date) { msg.textContent = "Date is required."; return; }
+  const btn = document.getElementById("cesave"); btn.disabled = true; btn.textContent = "Saving…";
+  const args = {
+    p_id: f.id, p_agent_name: String(f.agent_name).trim().toUpperCase(), p_entry_date: f.entry_date,
+    p_third_party: f.third_party || null, p_agent2: f.agent2 || null, p_deal_type: f.deal_type,
+    p_unit: f.unit || null, p_building: f.building || null, p_area: f.area || null,
+    p_annual_value: num(f.annual_value), p_total_commission: num(f.total_commission), p_received: num(f.received),
+    p_vat: num(f.vat), p_commission_ex_vat: num(f.commission_ex_vat), p_agent_business: num(f.agent_business),
+    p_xsite_share: num(f.xsite_share), p_agent_share: num(f.agent_share),
+  };
+  let error = null;
+  const rpc = await supabase.rpc("save_commission_entry", args);
+  if (rpc.error && /function|does not exist|schema cache/i.test(rpc.error.message)) {
+    const row = {
+      agent_name: args.p_agent_name, entry_date: args.p_entry_date, month: args.p_entry_date.slice(0, 7),
+      third_party: args.p_third_party || "N/A", agent2: args.p_agent2 || "N/A", deal_type: args.p_deal_type,
+      unit: args.p_unit, building: args.p_building, area: args.p_area, annual_value: args.p_annual_value,
+      total_commission: args.p_total_commission, received: args.p_received, vat: args.p_vat,
+      commission_ex_vat: args.p_commission_ex_vat, agent_business: args.p_agent_business,
+      xsite_share: args.p_xsite_share, agent_share: args.p_agent_share,
+    };
+    if (f.id) ({ error } = await supabase.from("commission_entries").update(row).eq("id", f.id));
+    else ({ error } = await supabase.from("commission_entries").insert({ ...row, group_id: crypto.randomUUID() }));
+  } else error = rpc.error;
+  if (error) { msg.textContent = error.message; btn.disabled = false; btn.textContent = f.id ? "Save changes" : "Save entry"; return; }
+  if (!await reloadAfterWrite(reloadDeals, "Commission entry")) return;
+  state.ceMonth = f.entry_date.slice(0, 7);
+  state.ceForm = null;
+  render();
+}
+
+async function deleteCommissionEntry(id) {
+  const r = state.commission.find((x) => x.id === id);
+  if (!r || !window.confirm(`Delete this ${money(r.received)} entry for ${r.agent_name}?`)) return;
+  let error = null;
+  const rpc = await supabase.rpc("delete_commission_entry", { p_id: id });
+  if (rpc.error && /function|does not exist|schema cache/i.test(rpc.error.message)) {
+    ({ error } = await supabase.from("commission_entries").delete().eq("id", id));
+  } else error = rpc.error;
+  if (error) { window.alert("Could not delete: " + error.message); return; }
+  if (!await reloadAfterWrite(reloadDeals, "Commission entry deletion")) return;
+  render();
+}
+
 // ── wiring ───────────────────────────────────────────────
 function wireScreen() {
   const retry = document.getElementById("retryload");
@@ -2692,6 +2863,20 @@ function wireScreen() {
   // contract documents
   root.querySelectorAll("[data-files]").forEach((b) => b.onclick = () => { state.filesFor = { contractId: b.dataset.files, msg: "" }; render(); });
   root.querySelectorAll("[data-openfile]").forEach((b) => b.onclick = () => openContractFile(b.dataset.openfile));
+  // commission entry
+  const newCe = document.getElementById("newce"); if (newCe) newCe.onclick = () => { state.ceForm = emptyCeForm(); render(); };
+  root.querySelectorAll("[data-cemonth]").forEach((b) => b.onclick = () => { state.ceMonth = b.dataset.cemonth; render(); });
+  root.querySelectorAll("[data-editce]").forEach((b) => b.onclick = () => {
+    const r = state.commission.find((x) => x.id === b.dataset.editce);
+    if (r) { state.ceForm = ceFormFromRow(r); render(); }
+  });
+  root.querySelectorAll("[data-delce]").forEach((b) => b.onclick = () => deleteCommissionEntry(b.dataset.delce));
+  const ceq = document.getElementById("ceq");
+  if (ceq) ceq.oninput = () => {
+    state.ceQuery = ceq.value;
+    const main = root.querySelector("main"); main.innerHTML = viewCommissionEntry(); wireScreen();
+    const el = document.getElementById("ceq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
+  };
   // deal submissions
   const newSub = document.getElementById("newsub"); if (newSub) newSub.onclick = () => { state.subForm = emptySubForm(); render(); };
   root.querySelectorAll("[data-viewsub]").forEach((b) => b.onclick = () => { state.subView = b.dataset.viewsub; render(); });
@@ -2769,6 +2954,13 @@ function wireModals() {
   // contract documents modal
   const filesClose = document.getElementById("filesclose"); if (filesClose) filesClose.onclick = () => { state.filesFor = null; render(); };
   const fileUpload = document.getElementById("fu_upload"); if (fileUpload) fileUpload.onclick = uploadContractFile;
+  // commission entry modal
+  const ceClose = document.getElementById("ceclose"); if (ceClose) ceClose.onclick = () => { state.ceForm = null; render(); };
+  const ceCancel = document.getElementById("cecancel"); if (ceCancel) ceCancel.onclick = () => { state.ceForm = null; render(); };
+  const ceSave = document.getElementById("cesave"); if (ceSave) ceSave.onclick = saveCommissionEntry;
+  ["ce_total_commission", "ce_received", "ce_agent2"].forEach((id) => {
+    const el = document.getElementById(id); if (el) el.oninput = ceAutoMath;
+  });
   // submission modal
   const subClose = document.getElementById("subclose"); if (subClose) subClose.onclick = () => { state.subForm = null; render(); };
   const subCancel = document.getElementById("subcancel"); if (subCancel) subCancel.onclick = () => { state.subForm = null; render(); };
@@ -2795,6 +2987,7 @@ function wireModals() {
     else if (state.printContract) { state.printContract = null; render(); }
     else if (state.contractForm) { state.contractForm = null; render(); }
     else if (state.filesFor) { state.filesFor = null; render(); }
+    else if (state.ceForm) { state.ceForm = null; render(); }
     else if (state.subForm) { state.subForm = null; render(); }
     else if (state.subView) { state.subView = null; render(); }
     else if (state.contactForm) { state.contactForm = null; render(); }
