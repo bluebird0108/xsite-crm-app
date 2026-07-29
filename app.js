@@ -368,7 +368,7 @@ async function signUp() {
   if (password.length < 8) { renderLogin({ kind: "is-error", text: "Password must be at least 8 characters.", email }); return; }
   const btn = document.getElementById("authgo"); btn.disabled = true; btn.textContent = "Creating account…";
   const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName } } });
-  if (error) { renderLogin({ kind: "is-error", text: error.message, email }); return; }
+  if (error) { renderLogin({ kind: "is-error", text: authEmailError(error), email }); return; }
   if (data.session) {
     try { await resolveProfile(data.session); await loadData(); }
     catch (loadError) { state.fatalError = loadError.message; }
