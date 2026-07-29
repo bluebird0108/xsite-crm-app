@@ -772,7 +772,7 @@ function contractInput(id, label, value, type = "text", extra = "") {
 function viewContractModal() {
   const f = state.contractForm;
   if (!f) return "";
-  const options = dealGroupOptions().map((o) => `<option value="${o.group}" ${o.group === f.deal_group ? "selected" : ""}>${esc(o.label)}</option>`).join("");
+  const options = `<option value="" ${!f.deal_group ? "selected" : ""}>— No linked deal —</option>` + dealGroupOptions().map((o) => `<option value="${o.group}" ${o.group === f.deal_group ? "selected" : ""}>${esc(o.label)}</option>`).join("");
   const d = f.details || {}, a = f.addendum || {};
   return `<div class="modal-backdrop"><div class="modal contract-modal" role="dialog" aria-modal="true" aria-labelledby="contracttitle">
     <div class="modal-head"><h3 id="contracttitle">${f.id ? `Edit ${esc(f.contract_no)}` : "New tenancy contract draft"}</h3><button class="modal-close" id="contractclose" aria-label="Close">×</button></div>
@@ -802,14 +802,14 @@ async function saveContract(status) {
   const value = (id) => document.getElementById(id)?.value?.trim() || "";
   const msg = document.getElementById("contractmsg");
   const payload = {
-    p_id: state.contractForm.id || null, p_deal_group: value("ct_deal"), p_status: status,
+    p_id: state.contractForm.id || null, p_deal_group: value("ct_deal") || null, p_status: status,
     p_contract_date: value("ct_contract_date"), p_start_date: value("ct_start"), p_end_date: value("ct_end"),
     p_landlord_name: value("ct_landlord"), p_tenant_name: value("ct_tenant"), p_owner_phone: value("ct_owner_phone"), p_tenant_phone: value("ct_tenant_phone"),
     p_annual_rent: Number(value("ct_rent")), p_security_deposit: Number(value("ct_deposit")), p_payment_mode: value("ct_payment"), p_additional_terms: value("ct_terms"),
     p_details: { lessorName:value("ct_lessor"), lessorEmiratesId:value("ct_lessor_id"), lessorEmail:value("ct_lessor_email"), lessorLicenseNo:value("ct_lessor_license"), lessorLicensingAuthority:value("ct_lessor_authority"), tenantEmiratesId:value("ct_tenant_id"), tenantEmail:value("ct_tenant_email"), tenantLicenseNo:value("ct_tenant_license"), tenantLicensingAuthority:value("ct_tenant_authority"), plotNo:value("ct_plot"), makaniNo:value("ct_makani"), buildingName:value("ct_building"), propertyNo:value("ct_unit"), propertyType:value("ct_property_type"), contractValue:value("ct_contract_value"), unitType:value("ct_unit_type"), propertyArea:value("ct_area_sqm"), location:value("ct_location"), premisesNo:value("ct_premises_no") },
     p_addendum: { furnishing:value("ct_furnishing"), premises:value("ct_add_premises"), unitNo:value("ct_add_unit"), building:value("ct_add_building"), area:value("ct_add_area"), city:value("ct_add_city"), customTerms:value("ct_add_terms") },
   };
-  if (!payload.p_deal_group || !payload.p_contract_date || !payload.p_start_date || !payload.p_end_date || !payload.p_landlord_name || !payload.p_tenant_name || !Number.isFinite(payload.p_annual_rent) || payload.p_annual_rent < 0 || !Number.isFinite(payload.p_security_deposit) || payload.p_security_deposit < 0) { msg.textContent = "Deal, valid dates, parties, and non-negative amounts are required."; return; }
+  if (!payload.p_contract_date || !payload.p_start_date || !payload.p_end_date || !payload.p_landlord_name || !payload.p_tenant_name || !Number.isFinite(payload.p_annual_rent) || payload.p_annual_rent < 0 || !Number.isFinite(payload.p_security_deposit) || payload.p_security_deposit < 0) { msg.textContent = "Valid dates, parties, and non-negative amounts are required."; return; }
   if (status === "final") {
     const required = [[payload.p_owner_phone,"Owner phone"],[payload.p_tenant_phone,"Tenant phone"],[payload.p_payment_mode,"Payment mode"],[payload.p_details.lessorEmail,"Lessor email"],[payload.p_details.tenantEmail,"Tenant email"],[payload.p_details.buildingName,"Building"],[payload.p_details.propertyNo,"Property / unit no."],[payload.p_details.unitType,"Unit type"],[payload.p_details.location,"Location"],[payload.p_details.premisesNo,"Premises no."],[payload.p_addendum.furnishing,"Furnishing"],[payload.p_addendum.premises,"Addendum premises"],[payload.p_addendum.unitNo,"Addendum unit"],[payload.p_addendum.building,"Addendum building"],[payload.p_addendum.area,"Addendum area"],[payload.p_addendum.city,"Addendum city"]];
     const missing = required.filter(([entry])=>!entry).map(([,label])=>label);
@@ -1364,6 +1364,7 @@ function dealGroupOptions() {
     .map((d) => ({ group: d.group_id, label: `${d.sno ?? "—"} · ${d.unit || ""} ${d.building || ""} — ${d.agent}`.trim(), deal: d }));
 }
 function dealLabelFor(group) {
+  if (!group) return "—";
   const opt = dealGroupOptions().find((o) => o.group === group);
   return opt ? opt.label : "(deal removed)";
 }
@@ -1457,7 +1458,7 @@ function viewDocModal() {
               <option value="invoice" ${f.doc_type === "invoice" ? "selected" : ""}>Invoice — payment requested</option>
             </select></div>
           <div class="field"><label for="d_date">Date</label><input class="input" id="d_date" type="date" value="${esc(f.doc_date)}"></div>
-          <div class="field" style="grid-column:1/-1"><label for="d_deal">Deal (required — type to search the register)</label>
+          <div class="field" style="grid-column:1/-1"><label for="d_deal">Deal (optional — type to search the register)</label>
             <input class="input" id="d_deal" list="deallist" value="${esc(f.dealLabel)}" placeholder="e.g. 47 · 208 Herad Tower — Saheer Salim"></div>
           <div class="field"><label for="d_client">Client</label><input class="input" id="d_client" value="${esc(f.client)}"></div>
           <div class="field"><label for="d_amount">Amount (AED)</label><input class="input" id="d_amount" type="number" value="${esc(f.amount)}"></div>
@@ -1487,15 +1488,15 @@ function docPrefill() {
 async function saveDoc() {
   const f = state.docForm;
   const g = (id) => document.getElementById(id).value;
-  const label = g("d_deal");
+  const label = g("d_deal").trim();
   const opt = dealGroupOptions().find((o) => o.label === label);
   const msgEl = document.getElementById("docmsg");
-  if (!opt) { msgEl.textContent = "Pick a deal from the register list."; return; }
+  if (label && !opt) { msgEl.textContent = "Pick a deal from the register list, or leave it blank."; return; }
   if (!g("d_amount") || !g("d_date")) { msgEl.textContent = "Date and amount are required."; return; }
   const type = g("d_type");
   const btn = document.getElementById("docsave"); btn.disabled = true; btn.textContent = "Saving…";
   const rec = {
-    doc_type: type, deal_group: opt.group, client: g("d_client") || null,
+    doc_type: type, deal_group: opt ? opt.group : null, client: g("d_client") || null,
     description: g("d_desc") || null, amount: parseFloat(g("d_amount")),
     doc_date: g("d_date"), month: g("d_date").slice(0, 7),
     payment_method: g("d_pay") || null,
