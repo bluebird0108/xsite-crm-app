@@ -265,7 +265,16 @@ async function resolveProfile(session) {
     : { id: session.user.id, role: "pending", agent_name: null, full_name: "", email: session.user.email };
 }
 
+let authLinkNotice = null;
 async function boot() {
+  const hashParams = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+  const hashError = hashParams.get("error_description") || hashParams.get("error");
+  if (hashError) {
+    authLinkNotice = /expired|invalid/i.test(hashError)
+      ? "That email link has expired or was already used. Send yourself a fresh one."
+      : decodeURIComponent(hashError).replace(/\+/g, " ");
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
   const sessionResult = await supabase.auth.getSession();
   if (sessionResult.error) state.fatalError = `Could not restore your session: ${sessionResult.error.message}`;
   const session = sessionResult.data?.session;
@@ -375,16 +384,26 @@ async function forgotPassword() {
   const email = document.getElementById("email").value.trim();
   if (!email) { renderLogin({ kind: "is-error", text: "Enter your work email first, then choose Forgot your password." }); return; }
   const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + window.location.pathname });
-  if (error) renderLogin({ kind: "is-error", text: error.message, email });
+  if (error) renderLogin({ kind: "is-error", text: authEmailError(error), email });
   else renderLogin({ kind: "is-ok", text: "Password reset link sent. Open it from your email to choose a new password.", email });
+}
+
+function authEmailError(error) {
+  const m = String(error.message || "");
+  if (/rate limit/i.test(m)) return "Too many emails sent just now — Supabase's free email service allows only a few per hour. Wait a while and try again.";
+  if (/redirect|not allowed|invalid.*url/i.test(m)) return "This site's address is not authorised for email links yet. Add it in Supabase → Authentication → URL Configuration.";
+  if (/signups not allowed|user not found/i.test(m)) return "No account exists for that email. Check the spelling, or create an account first.";
+  return m;
 }
 
 async function sendLink() {
   const email = document.getElementById("email").value.trim();
   if (!email) { renderLogin({ kind: "is-error", text: "Enter your work email first." }); return; }
-  const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.href } });
-  if (error) { renderLogin({ kind: "is-error", text: error.message, email }); }
-  else { renderLogin({ kind: "is-ok", text: "Check your email for the sign-in link.", email }); }
+  // Clean redirect (no stale #fragments); never create ghost accounts for typos.
+  const { error } = await supabase.auth.signInWithOtp({ email, options: {
+    emailRedirectTo: window.location.origin + window.location.pathname, shouldCreateUser: false } });
+  if (error) { renderLogin({ kind: "is-error", text: authEmailError(error), email }); }
+  else { renderLogin({ kind: "is-ok", text: "Sign-in link sent — open it from this device. It expires after one use.", email }); }
 }
 
 // ── render: app shell ────────────────────────────────────
@@ -3040,7 +3059,11 @@ function rerenderLedgers() {
 }
 
 function render() {
-  state.profile ? renderApp() : renderLogin(state.fatalError ? { kind: "is-error", text: state.fatalError } : undefined);
+  if (state.profile) { renderApp(); return; }
+  const notice = state.fatalError ? { kind: "is-error", text: state.fatalError }
+    : authLinkNotice ? { kind: "is-error", text: authLinkNotice } : undefined;
+  authLinkNotice = null;
+  renderLogin(notice);
 }
 
 boot();
