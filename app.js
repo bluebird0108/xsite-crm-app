@@ -20,7 +20,7 @@ const state = {
   screen: "dashboard",
   authMode: "signin",
   agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [], requests: [], contracts: [], accountTasks: [],
-  contacts: [], cashMovements: [], contractFiles: [],
+  contacts: [], cashMovements: [], contractFiles: [], submissions: [],
   selectedAgent: null,
   txQuery: "", txType: "All", ledgerQuery: "",
   txMonth: null, ledgerMonth: null,
@@ -32,7 +32,7 @@ const state = {
   dashQuery: "", activityDay: null,
   dealForm: null, pwForm: false, docForm: null, cashForm: null, requestForm: null,
   contractForm: null, printContract: null, printInvoice: null,
-  contactForm: null, cashMoveForm: null, filesFor: null,
+  contactForm: null, cashMoveForm: null, filesFor: null, subForm: null, subView: null,
 };
 
 // ── helpers ──────────────────────────────────────────────
@@ -79,7 +79,7 @@ function clearSensitiveState() {
   state.agents = []; state.deals = []; state.commission = []; state.cash = [];
   state.team = []; state.docs = []; state.staff = []; state.requests = [];
   state.contracts = []; state.accountTasks = [];
-  state.contacts = []; state.cashMovements = []; state.contractFiles = [];
+  state.contacts = []; state.cashMovements = []; state.contractFiles = []; state.submissions = [];
   state.dealForm = null; state.pwForm = false; state.docForm = null;
   state.cashForm = null; state.requestForm = null; state.contractForm = null; state.printContract = null;
   state.contactForm = null; state.cashMoveForm = null;
@@ -96,7 +96,8 @@ const COLUMNS = {
   contracts: "id,contract_no,deal_group,status,contract_date,start_date,end_date,landlord_name,tenant_name,owner_phone,tenant_phone,annual_rent,security_deposit,payment_mode,additional_terms,details,addendum,ejari_status,created_by,finalized_by,finalized_at,created_at,updated_at",
   account_tasks: "id,contract_id,task_type,status,money_doc_id,completed_by,completed_at,created_at",
   contacts: "id,name,contact_type,phone,email,notes,last_contact,birthday,created_by,created_at,updated_at",
-  contract_files: "id,contract_id,doc_type,file_name,storage_path,size_bytes,uploaded_by_name,created_at",
+  contract_files: "id,contract_id,submission_id,doc_type,file_name,storage_path,size_bytes,uploaded_by_name,created_at",
+  deal_submissions: "id,status,submitted_by_name,agent_name,owner_name,owner_phone,owner_email,owner_emirates_id,tenant_name,tenant_phone,tenant_email,tenant_emirates_id,building,unit,area,moving_date,cheque_count,price,dewa_number,notes,contract_id,reviewed_by_name,created_at",
   cash_movements: "id,movement_date,direction,channel,bank_account,agent_name,client,property,amount,reference,month,created_by,created_at",
 };
 async function fetchAll(table, orderColumn, ascending = true, columns = COLUMNS[table]) {
@@ -147,10 +148,10 @@ async function loadData() {
     state.agents = []; state.deals = []; state.commission = []; state.cash = [];
     state.team = []; state.docs = []; state.staff = []; state.requests = [];
     state.contracts = []; state.accountTasks = [];
-    state.contacts = []; state.cashMovements = []; state.contractFiles = [];
+    state.contacts = []; state.cashMovements = []; state.contractFiles = []; state.submissions = [];
     return;
   }
-  const [ag, dl, cm, ch, tm, md, sf, rq, ct, at, co, mv, cf] = await Promise.all([
+  const [ag, dl, cm, ch, tm, md, sf, rq, ct, at, co, mv, cf, sb] = await Promise.all([
     fetchAll("agents", "name"),
     fetchAll("deals", "sno"),
     fetchAll("commission_entries", "agent_name"),
@@ -163,7 +164,8 @@ async function loadData() {
     roleIn("owner", "accounts", "admin") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
     roleIn("owner", "accounts", "admin") ? fetchAllSafe("contacts", "name", true, true) : Promise.resolve({ data: [] }),
     roleIn("owner", "accounts", "admin") ? fetchAllSafe("cash_movements", "movement_date", false) : Promise.resolve({ data: [] }),
-    roleIn("owner", "accounts", "admin") ? fetchAllSafe("contract_files", "created_at", false) : Promise.resolve({ data: [] }),
+    fetchAllSafe("contract_files", "created_at", false),
+    fetchAllSafe("deal_submissions", "created_at", false),
   ]);
   state.agents = requireData(ag, "Could not load agents");
   state.deals = requireData(dl, "Could not load deals");
@@ -178,6 +180,7 @@ async function loadData() {
   state.contacts = requireData(co, "Could not load contacts");
   state.cashMovements = requireData(mv, "Could not load cash and bank movements");
   state.contractFiles = requireData(cf, "Could not load documents");
+  state.submissions = requireData(sb, "Could not load deal submissions");
   const cbmonths = availableMonths(state.cashMovements, "month");
   if (!state.cbMonth || !cbmonths.includes(state.cbMonth)) state.cbMonth = cbmonths[0] || null;
   const months = availableMonths(state.deals, "month");
@@ -375,6 +378,7 @@ function renderApp() {
   const showTeam = roleIn("owner", "admin");
   const pendingTeam = state.team.filter((t) => t.role === "pending").length;
   const pendingRequests = state.requests.filter((request) => request.status === "pending").length;
+  const newSubs = state.submissions.filter((sub) => sub.status === "submitted").length;
   const pendingAccountTasks = state.accountTasks.filter((task) => task.status === "pending").length;
   const renewalAlerts = state.contracts.filter((contract) => contract.status === "final" && ["due", "expired"].includes(renewalStatus(contract.end_date).status)).length;
   const contractAlerts = pendingAccountTasks + renewalAlerts;
@@ -389,6 +393,7 @@ function renderApp() {
     ${roleIn("owner", "accounts") ? navLink("invoices", "Invoices & Receipts") : ""}
     ${roleIn("owner", "accounts") ? navLink("cashbank", "Cash & Bank") : ""}
     ${roleIn("owner", "accounts", "agent") ? navLink("ledgers", roleIn("agent") ? "My Ledger" : "Agent Ledgers") : ""}
+    ${roleIn("owner", "admin", "agent") ? navLink("submissions", newSubs ? `Submissions (${newSubs})` : "Submissions") : ""}
     ${roleIn("pending") ? "" : navLink("requests", pendingRequests ? `Requests (${pendingRequests})` : "Requests")}
     ${roleIn("owner", "admin") ? navLink("staff", "Staff") : ""}
     ${showTeam ? navLink("team", pendingTeam ? `Team (${pendingTeam})` : "Team") : ""}
@@ -409,12 +414,13 @@ function renderApp() {
   else if (state.screen === "invoices" && roleIn("owner", "accounts")) body = viewInvoices();
   else if (state.screen === "cashbank" && roleIn("owner", "accounts")) body = viewCashBank();
   else if (state.screen === "ledgers" && roleIn("owner", "accounts", "agent")) body = viewLedgers();
+  else if (state.screen === "submissions" && roleIn("owner", "admin", "agent")) body = viewSubmissions();
   else if (state.screen === "requests") body = viewRequests();
   else if (state.screen === "staff" && roleIn("owner", "admin")) body = viewStaff();
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else if (roleIn("agent")) body = viewLedgers();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal();
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
@@ -800,7 +806,18 @@ async function saveContract(status) {
   const buttons = document.querySelectorAll("#contractdraft,#contractfinal"); buttons.forEach((button)=>button.disabled=true);
   const result = await supabase.rpc("save_contract", payload);
   if (result.error) { msg.textContent = result.error.message; buttons.forEach((button)=>button.disabled=false); return; }
+  const fromSubmission = state.contractForm?.fromSubmission;
   state.contractForm = null; await reloadAfterWrite(reloadContracts, status === "final" ? "Final contract" : "Contract draft");
+  if (fromSubmission) {
+    // Close the loop: the agent sees their submission turn into a contract.
+    try {
+      await supabase.from("deal_submissions").update({
+        status: "converted", reviewed_by_name: state.profile.full_name || state.profile.email,
+        reviewed_at: new Date().toISOString(),
+      }).eq("id", fromSubmission);
+      await reloadSubmissions();
+    } catch { /* non-fatal */ }
+  }
   await syncContractContacts(payload);
   render();
 }
@@ -2289,6 +2306,197 @@ async function deleteContractFile(id) {
   render();
 }
 
+// ── deal submissions (agent → admin handoff) ─────────────
+const SUB_STATUS = { submitted: "New", in_progress: "In progress", converted: "Contract made", rejected: "Rejected" };
+const subFiles = (id) => state.contractFiles.filter((f) => f.submission_id === id);
+
+async function reloadSubmissions() {
+  const [subs, files] = await Promise.all([
+    fetchAllSafe("deal_submissions", "created_at", false),
+    fetchAllSafe("contract_files", "created_at", false),
+  ]);
+  state.submissions = requireData(subs, "Could not reload submissions");
+  state.contractFiles = requireData(files, "Could not reload documents");
+}
+
+function viewSubmissions() {
+  const isAgent = roleIn("agent");
+  const canReview = roleIn("owner", "admin");
+  const rows = state.submissions.map((s) => {
+    const files = subFiles(s.id).length;
+    return `<tr>
+      <td>${esc(showDate((s.created_at || "").slice(0, 10)))}</td>
+      <td>${esc(s.submitted_by_name || s.agent_name || "—")}</td>
+      <td><strong>${esc([s.unit, s.building].filter(Boolean).join(" ") || "—")}</strong><div class="text-muted">${esc(s.area || "")}</div></td>
+      <td>${esc(s.owner_name || "—")}</td>
+      <td>${esc(s.tenant_name || "—")}</td>
+      <td class="numeric">${money(s.price)}</td>
+      <td>${esc(showDate(s.moving_date))}</td>
+      <td>${files ? `<span class="tag tag-neutral">${files} file${files === 1 ? "" : "s"}</span>` : `<span class="text-muted">none</span>`}</td>
+      <td><span class="tag ${s.status === "submitted" ? "tag-accent" : "tag-neutral"}">${esc(SUB_STATUS[s.status] || s.status)}</span></td>
+      <td style="white-space:nowrap"><button class="btn btn-secondary btn-mini" data-viewsub="${s.id}">Open</button>${canReview && s.status !== "converted" ? ` <button class="btn btn-primary btn-mini" data-makecontract="${s.id}">Make contract</button>` : ""}</td>
+    </tr>`;
+  }).join("");
+  const pending = state.submissions.filter((s) => s.status === "submitted").length;
+  return `<div>
+    <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div><span class="card-kicker">${isAgent ? "Agent" : "Admin"} / Deal intake</span><h1 style="margin-top:4px">${isAgent ? "My Submissions" : "Deal Submissions"}</h1>
+      <p class="text-muted" style="margin:0">${isAgent ? "Send owner and tenant details with documents — admin makes the contract." : `${pending} new submission${pending === 1 ? "" : "s"} awaiting a contract.`}</p></div>
+      ${roleIn("agent", "owner", "admin") ? `<button class="btn btn-primary" id="newsub">+ New submission</button>` : ""}
+    </div>
+    <div class="sheet"><div class="sheet-hint">${state.submissions.length} submissions</div>
+      <div class="table-wrap"><table class="grid" style="min-width:1100px">
+        <thead><tr><th>Date</th><th>Agent</th><th>Property</th><th>Owner</th><th>Tenant</th><th>Price</th><th>Moving date</th><th>Docs</th><th>Status</th><th></th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="10"><div class="md-empty" style="border:0">No submissions yet.</div></td></tr>`}</tbody>
+      </table></div>
+    </div>
+  </div>`;
+}
+
+function emptySubForm() {
+  return { owner_name: "", owner_phone: "", owner_email: "", owner_emirates_id: "",
+    tenant_name: "", tenant_phone: "", tenant_email: "", tenant_emirates_id: "",
+    building: "", unit: "", area: "", moving_date: "", cheque_count: "", price: "",
+    dewa_number: "", notes: "", msg: "", savedId: null };
+}
+
+function viewSubModal() {
+  const f = state.subForm;
+  if (!f) return "";
+  const fld = (id, label, type = "text", extra = "") =>
+    `<div class="field"><label for="sb_${id}">${label}</label><input class="input" id="sb_${id}" type="${type}" value="${esc(f[id] ?? "")}" ${extra}></div>`;
+  const files = f.savedId ? subFiles(f.savedId) : [];
+  return `<div class="modal-backdrop"><div class="modal contract-modal" role="dialog" aria-labelledby="subtitle">
+    <div class="modal-head"><h3 id="subtitle">New deal submission</h3><button class="modal-close" id="subclose" aria-label="Close">×</button></div>
+    <div class="modal-body">
+      <div class="contract-form-section"><h4>Owner details</h4><div class="form-grid">
+        ${fld("owner_name", "Owner name")}${fld("owner_phone", "Owner phone", "tel")}${fld("owner_email", "Owner email", "email")}${fld("owner_emirates_id", "Owner Emirates ID")}
+      </div></div>
+      <div class="contract-form-section"><h4>Tenant details</h4><div class="form-grid">
+        ${fld("tenant_name", "Tenant name")}${fld("tenant_phone", "Tenant phone", "tel")}${fld("tenant_email", "Tenant email", "email")}${fld("tenant_emirates_id", "Tenant Emirates ID")}
+      </div></div>
+      <div class="contract-form-section"><h4>Property and terms</h4><div class="form-grid">
+        ${fld("building", "Building")}${fld("unit", "Unit no.")}${fld("area", "Area / community")}
+        ${fld("price", "Price / annual rent (AED)", "number", 'min="0" step="0.01"')}${fld("moving_date", "Moving date", "date")}${fld("cheque_count", "Cheques")}${fld("dewa_number", "DEWA number")}
+        <div class="field" style="grid-column:1/-1"><label for="sb_notes">Extra notes</label><textarea class="input" id="sb_notes" rows="3" maxlength="2000">${esc(f.notes || "")}</textarea></div>
+      </div></div>
+      <div class="contract-form-section"><h4>Documents</h4>
+        ${f.savedId ? `<div class="form-grid" style="grid-template-columns:1fr 1fr auto;align-items:end;gap:10px">
+          <div class="field"><label for="sbf_type">Document type</label><select class="input" id="sbf_type">${DOC_TYPES.map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select></div>
+          <div class="field"><label for="sbf_file">Choose file (max 25 MB)</label><input class="input" id="sbf_file" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.doc,.docx"></div>
+          <button class="btn btn-secondary" id="sbf_upload">Upload</button>
+        </div>
+        ${files.length ? `<div class="table-wrap" style="margin-top:8px"><table class="grid"><thead><tr><th>Type</th><th>File</th><th>Size</th><th></th></tr></thead><tbody>
+          ${files.map((x) => `<tr><td>${esc(docTypeLabel(x.doc_type))}</td><td>${esc(x.file_name)}</td><td>${esc(fileSize(x.size_bytes))}</td><td><button class="btn btn-secondary btn-mini" data-openfile="${x.id}">Open</button></td></tr>`).join("")}
+        </tbody></table></div>` : `<p class="text-muted" style="font-size:12px">No documents attached yet.</p>`}`
+        : `<p class="text-muted" style="font-size:12px">Save the details first — then you can attach owner and tenant documents, cheques, and the signed contract.</p>`}
+      </div>
+      <div class="modal-actions"><span class="form-msg" id="submsg" aria-live="polite">${esc(f.msg || "")}</span>
+        <button class="btn btn-secondary" id="subcancel">${f.savedId ? "Done" : "Cancel"}</button>
+        <button class="btn btn-primary" id="subsave">${f.savedId ? "Save changes" : "Save details"}</button></div>
+    </div></div></div>`;
+}
+
+function viewSubDetail() {
+  const s = state.subView ? state.submissions.find((x) => x.id === state.subView) : null;
+  if (!s) return "";
+  const files = subFiles(s.id);
+  const line = (k, v) => `<div><span class="text-muted" style="font-size:11px;display:block">${k}</span><strong>${esc(v || "—")}</strong></div>`;
+  return `<div class="modal-backdrop"><div class="modal" style="width:min(860px,100%)" role="dialog" aria-labelledby="sdtitle">
+    <div class="modal-head"><h3 id="sdtitle">Submission — ${esc([s.unit, s.building].filter(Boolean).join(" ") || "deal")}</h3><button class="modal-close" id="sdclose" aria-label="Close">×</button></div>
+    <div class="modal-body">
+      <p class="text-muted" style="font-size:12px;margin-top:0">From ${esc(s.submitted_by_name || "—")} · ${esc(showDate((s.created_at || "").slice(0, 10)))} · <span class="tag ${s.status === "submitted" ? "tag-accent" : "tag-neutral"}">${esc(SUB_STATUS[s.status] || s.status)}</span></p>
+      <div class="contract-form-section"><h4>Owner</h4><div class="form-grid">${line("Name", s.owner_name)}${line("Phone", s.owner_phone)}${line("Email", s.owner_email)}${line("Emirates ID", s.owner_emirates_id)}</div></div>
+      <div class="contract-form-section"><h4>Tenant</h4><div class="form-grid">${line("Name", s.tenant_name)}${line("Phone", s.tenant_phone)}${line("Email", s.tenant_email)}${line("Emirates ID", s.tenant_emirates_id)}</div></div>
+      <div class="contract-form-section"><h4>Property and terms</h4><div class="form-grid">${line("Building", s.building)}${line("Unit", s.unit)}${line("Area", s.area)}${line("Price", money(s.price))}${line("Moving date", showDate(s.moving_date))}${line("Cheques", s.cheque_count)}${line("DEWA number", s.dewa_number)}</div>
+        ${s.notes ? `<p style="margin-top:10px;white-space:pre-wrap">${esc(s.notes)}</p>` : ""}</div>
+      <div class="contract-form-section"><h4>Documents (${files.length})</h4>
+        ${files.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>Type</th><th>File</th><th>Size</th><th>Uploaded by</th><th></th></tr></thead><tbody>
+          ${files.map((x) => `<tr><td>${esc(docTypeLabel(x.doc_type))}</td><td>${esc(x.file_name)}</td><td>${esc(fileSize(x.size_bytes))}</td><td>${esc(x.uploaded_by_name || "—")}</td><td><button class="btn btn-secondary btn-mini" data-openfile="${x.id}">Open</button></td></tr>`).join("")}
+        </tbody></table></div>` : `<p class="text-muted" style="font-size:12px">No documents attached.</p>`}
+      </div>
+      <div class="modal-actions"><button class="btn btn-secondary" id="sdcancel">Close</button>
+        ${roleIn("owner", "admin") && s.status !== "converted" ? `<button class="btn btn-primary" data-makecontract="${s.id}">Make contract from this</button>` : ""}</div>
+    </div></div></div>`;
+}
+
+async function saveSubmission() {
+  const f = state.subForm;
+  const g = (id) => document.getElementById("sb_" + id)?.value?.trim() || "";
+  const msg = document.getElementById("submsg");
+  const payload = {
+    owner_name: g("owner_name"), owner_phone: g("owner_phone"), owner_email: g("owner_email"), owner_emirates_id: g("owner_emirates_id"),
+    tenant_name: g("tenant_name"), tenant_phone: g("tenant_phone"), tenant_email: g("tenant_email"), tenant_emirates_id: g("tenant_emirates_id"),
+    building: g("building"), unit: g("unit"), area: g("area"),
+    moving_date: g("moving_date") || null, cheque_count: g("cheque_count"),
+    price: g("price") ? Number(g("price")) : null, dewa_number: g("dewa_number"), notes: g("notes"),
+  };
+  if (!payload.owner_name || !payload.tenant_name || !payload.building) { msg.textContent = "Owner name, tenant name, and building are required."; return; }
+  const btn = document.getElementById("subsave"); btn.disabled = true; btn.textContent = "Saving…";
+  let error, id = f.savedId;
+  if (id) ({ error } = await supabase.from("deal_submissions").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", id));
+  else {
+    const ins = await supabase.from("deal_submissions").insert({
+      ...payload, submitted_by_name: state.profile.full_name || state.profile.email, agent_name: state.profile.agent_name || null,
+    }).select("id").single();
+    error = ins.error; id = ins.data?.id;
+  }
+  if (error) { msg.textContent = error.message; btn.disabled = false; btn.textContent = "Save details"; return; }
+  if (!await reloadAfterWrite(reloadSubmissions, "Submission")) return;
+  Object.assign(state.subForm, payload, { savedId: id, msg: "Saved — you can attach documents below." });
+  render();
+}
+
+async function uploadSubmissionFile() {
+  const input = document.getElementById("sbf_file");
+  const msg = document.getElementById("submsg");
+  const file = input?.files?.[0];
+  if (!file) { msg.textContent = "Choose a file first."; return; }
+  if (file.size > 25 * 1024 * 1024) { msg.textContent = "File is larger than 25 MB."; return; }
+  const btn = document.getElementById("sbf_upload"); btn.disabled = true; btn.textContent = "Uploading…";
+  const subId = state.subForm.savedId;
+  const safeName = file.name.replace(/[^\w.\- ]+/g, "_").slice(-120);
+  const path = `submissions/${subId}/${crypto.randomUUID()}-${safeName}`;
+  const up = await supabase.storage.from("documents").upload(path, file, { contentType: file.type || undefined });
+  if (up.error) { msg.textContent = "Upload failed: " + up.error.message; btn.disabled = false; btn.textContent = "Upload"; return; }
+  const ins = await supabase.from("contract_files").insert({
+    submission_id: subId, doc_type: document.getElementById("sbf_type").value, file_name: file.name,
+    storage_path: path, size_bytes: file.size, uploaded_by_name: state.profile.full_name || state.profile.email,
+  });
+  if (ins.error) {
+    await supabase.storage.from("documents").remove([path]);
+    msg.textContent = "Could not save: " + ins.error.message; btn.disabled = false; btn.textContent = "Upload"; return;
+  }
+  if (!await reloadAfterWrite(reloadSubmissions, "Document")) return;
+  state.subForm.msg = `Uploaded ${file.name}.`;
+  render();
+}
+
+// Admin turns a submission into a contract draft, pre-filled from the agent's details.
+function makeContractFromSubmission(id) {
+  const s = state.submissions.find((x) => x.id === id);
+  if (!s) return;
+  const draft = contractDraftFromDeal(dealGroupOptions()[0]?.deal);
+  draft.landlord_name = s.owner_name || "";
+  draft.tenant_name = s.tenant_name || "";
+  draft.owner_phone = s.owner_phone || "";
+  draft.tenant_phone = s.tenant_phone || "";
+  draft.annual_rent = s.price ?? "";
+  draft.start_date = s.moving_date || draft.start_date;
+  draft.payment_mode = s.cheque_count ? `${s.cheque_count} cheque(s)` : draft.payment_mode;
+  draft.additional_terms = s.notes || "";
+  draft.details = { ...draft.details, lessorName: s.owner_name || "", lessorEmail: s.owner_email || "",
+    lessorEmiratesId: s.owner_emirates_id || "", tenantEmail: s.tenant_email || "", tenantEmiratesId: s.tenant_emirates_id || "",
+    buildingName: s.building || "", propertyNo: s.unit || "", location: s.area || "",
+    premisesNo: s.dewa_number || "", contractValue: s.price ?? "" };
+  draft.addendum = { ...draft.addendum, unitNo: s.unit || "", building: s.building || "", area: s.area || "" };
+  draft.fromSubmission = id;
+  state.subView = null;
+  state.contractForm = draft;
+  state.screen = "contracts";
+  render();
+}
+
 // ── wiring ───────────────────────────────────────────────
 function wireScreen() {
   const retry = document.getElementById("retryload");
@@ -2405,6 +2613,10 @@ function wireScreen() {
   // contract documents
   root.querySelectorAll("[data-files]").forEach((b) => b.onclick = () => { state.filesFor = { contractId: b.dataset.files, msg: "" }; render(); });
   root.querySelectorAll("[data-openfile]").forEach((b) => b.onclick = () => openContractFile(b.dataset.openfile));
+  // deal submissions
+  const newSub = document.getElementById("newsub"); if (newSub) newSub.onclick = () => { state.subForm = emptySubForm(); render(); };
+  root.querySelectorAll("[data-viewsub]").forEach((b) => b.onclick = () => { state.subView = b.dataset.viewsub; render(); });
+  root.querySelectorAll("[data-makecontract]").forEach((b) => b.onclick = () => makeContractFromSubmission(b.dataset.makecontract));
   root.querySelectorAll("[data-delfile]").forEach((b) => b.onclick = () => deleteContractFile(b.dataset.delfile));
   // team activity — day selector
   const activityDay = document.getElementById("activityday");
@@ -2478,6 +2690,13 @@ function wireModals() {
   // contract documents modal
   const filesClose = document.getElementById("filesclose"); if (filesClose) filesClose.onclick = () => { state.filesFor = null; render(); };
   const fileUpload = document.getElementById("fu_upload"); if (fileUpload) fileUpload.onclick = uploadContractFile;
+  // submission modal
+  const subClose = document.getElementById("subclose"); if (subClose) subClose.onclick = () => { state.subForm = null; render(); };
+  const subCancel = document.getElementById("subcancel"); if (subCancel) subCancel.onclick = () => { state.subForm = null; render(); };
+  const subSave = document.getElementById("subsave"); if (subSave) subSave.onclick = saveSubmission;
+  const sbfUpload = document.getElementById("sbf_upload"); if (sbfUpload) sbfUpload.onclick = uploadSubmissionFile;
+  const sdClose = document.getElementById("sdclose"); if (sdClose) sdClose.onclick = () => { state.subView = null; render(); };
+  const sdCancel = document.getElementById("sdcancel"); if (sdCancel) sdCancel.onclick = () => { state.subView = null; render(); };
   const printClose = document.getElementById("printclose"); if (printClose) printClose.onclick = () => { state.printContract = null; render(); };
   const printNow = document.getElementById("printnow"); if (printNow) printNow.onclick = async () => {
     printNow.disabled = true; printNow.textContent = "Preparing pages…";
@@ -2497,6 +2716,8 @@ function wireModals() {
     else if (state.printContract) { state.printContract = null; render(); }
     else if (state.contractForm) { state.contractForm = null; render(); }
     else if (state.filesFor) { state.filesFor = null; render(); }
+    else if (state.subForm) { state.subForm = null; render(); }
+    else if (state.subView) { state.subView = null; render(); }
     else if (state.contactForm) { state.contactForm = null; render(); }
     else if (state.cashMoveForm) { state.cashMoveForm = null; render(); }
   };
