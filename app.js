@@ -765,8 +765,11 @@ function openContractForm(contract = null) {
 function contractHandoffSection() {
   if (!roleIn("owner", "accounts", "admin") || !state.accountTasks.length) return "";
   const canFulfill = roleIn("owner", "accounts");
-  const pending = state.accountTasks.filter((t) => t.status === "pending").length;
-  const taskRows = state.accountTasks.map((task) => {
+  // Only contracts still awaiting a receipt/invoice belong here — once Accounts
+  // has issued the document the task is done and drops off this list.
+  const openTasks = state.accountTasks.filter((t) => t.status === "pending");
+  const pending = openTasks.length;
+  const taskRows = openTasks.map((task) => {
     const contract = state.contracts.find((c) => c.id === task.contract_id);
     if (!contract) return "";
     const doc = state.docs.find((d) => d.id === task.money_doc_id);
@@ -786,7 +789,7 @@ function contractHandoffSection() {
       <td><span class="tag ${task.status === "pending" ? "tag-accent" : "tag-neutral"}">${esc(task.status)}</span></td><td>${action}</td></tr>`;
   }).join("");
   return `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Contracts awaiting Accounts</h3><span class="tag ${pending ? "tag-accent" : "tag-neutral"}">${pending} pending</span></div>
-    <div class="table-wrap"><table class="grid" style="min-width:1100px"><thead><tr><th>Contract</th><th>Tenant</th><th>Landlord / owner</th><th>Annual rent</th><th>Deposit</th><th>Payment mode</th><th>Documents</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div></section>`;
+    ${pending ? `<div class="table-wrap"><table class="grid" style="min-width:1100px"><thead><tr><th>Contract</th><th>Tenant</th><th>Landlord / owner</th><th>Annual rent</th><th>Deposit</th><th>Payment mode</th><th>Documents</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div>` : `<div class="md-empty" style="border:0">All caught up — every finalized contract has its invoice or receipt.</div>`}</section>`;
 }
 
 function viewContracts() {
@@ -1134,7 +1137,7 @@ function viewDashboard() {
   const birthdayCard = `
     <section class="md-section">
       <div class="md-section-header"><h3>Staff birthdays</h3><span class="tag ${birthdays.length ? "tag-accent" : "tag-neutral"}">${birthdays.length}</span></div>
-      ${birthdays.length ? `<div class="expiry-list">${birthdays.slice(0, 6).map((b) => `<div class="expiry-row"><div><strong>${esc(b.name)}</strong><div class="text-muted">${esc(b.job || "")}</div></div><span class="expiry-days">${b.dateLabel} · ${b.days === 0 ? "today" : `${b.days}d`}</span></div>`).join("")}</div>` : `<p class="text-muted" style="font-size:12px;margin:0">No birthdays in the next 30 days.</p>`}
+      ${birthdays.length ? `<div class="expiry-list">${birthdays.slice(0, 6).map((b) => `<div class="expiry-row"><div><strong title="${esc(b.name)}">${esc(shortName(b.name))}</strong><div class="text-muted">${esc(b.job || "")}</div></div><span class="expiry-days">${b.dateLabel} · ${b.days === 0 ? "today" : `${b.days}d`}</span></div>`).join("")}</div>` : `<p class="text-muted" style="font-size:12px;margin:0">No birthdays in the next 30 days.</p>`}
     </section>`;
   const alertStrip = `<div class="fin-strip" style="margin-top:20px">${ejariCard}${birthdayCard}</div>`;
 
@@ -1448,10 +1451,18 @@ function dealGroupOptions() {
   return state.deals.filter((d) => !seen.has(d.group_id) && seen.add(d.group_id))
     .map((d) => ({ group: d.group_id, label: `${d.sno ?? "—"} · ${d.unit || ""} ${d.building || ""} — ${d.agent}`.trim(), deal: d }));
 }
+// Friendly display name — the formal staff record carries first + father's
+// names ("SYED FARAZ HASSAN KAZMI SYED GHULAM RAZA KAZMI"); show the first two
+// words, title-cased, for cards and lists. Full names stay on official docs.
+function shortName(full) {
+  const parts = String(full || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "";
+  return parts.slice(0, 2).map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(" ");
+}
 function dealLabelFor(group) {
   if (!group) return "—";
   const opt = dealGroupOptions().find((o) => o.group === group);
-  return opt ? opt.label : "(deal removed)";
+  return opt ? opt.label : "—";
 }
 function viewInvoices() {
   const canEdit = roleIn("owner", "accounts");
@@ -2103,9 +2114,9 @@ function viewLedgers() {
     </div>` ;
   })() : "";
   const list = filtered.map((n) => { const rec = receivedFor(n); return `
-    <button class="ledger-agent ${n === state.selectedAgent ? "is-active" : ""}" data-agent="${esc(n)}">
+    <button class="ledger-agent ${n === state.selectedAgent ? "is-active" : ""}" data-agent="${esc(n)}" title="${esc(n)}">
       <span class="ledger-avatar">${esc(n.split(" ").map((w) => w[0]).join("").slice(0, 2))}</span>
-      <span style="min-width:0;flex:1"><span style="display:block;font-weight:700;font-size:13px">${esc(n)}</span>${teamFor(n) ? `<span class="text-muted" style="display:block;font-size:11px">${esc(teamFor(n))}</span>` : ""}</span>
+      <span style="min-width:0;flex:1"><span style="display:block;font-weight:700;font-size:13px">${esc(shortName(n))}</span>${teamFor(n) ? `<span class="text-muted" style="display:block;font-size:11px">${esc(teamFor(n))}</span>` : ""}</span>
       <span class="ledger-agent-amt ${rec ? "" : "is-zero"}">${rec ? money(Math.round(rec)) : "—"}</span>
     </button>`; }).join("");
   const sheet = state.selectedAgent ? `
