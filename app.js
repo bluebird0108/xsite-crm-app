@@ -83,6 +83,8 @@ function clearSensitiveState() {
   state.dealForm = null; state.pwForm = false; state.docForm = null;
   state.cashForm = null; state.requestForm = null; state.contractForm = null; state.printContract = null;
   state.contactForm = null; state.cashMoveForm = null;
+  state.printInvoice = null; state.filesFor = null; state.subForm = null;
+  state.subView = null; state.ceForm = null;
 }
 const COLUMNS = {
   agents: "id,name,role,month,agent_business_including_vat",
@@ -158,7 +160,7 @@ async function loadData() {
     roleIn("owner", "accounts", "admin") ? fetchAll("cash_position", "sort_order") : Promise.resolve({ data: [] }),
     roleIn("owner", "admin") ? fetchAll("profiles", "created_at") : Promise.resolve({ data: [] }),
     roleIn("owner", "accounts", "admin") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
-    roleIn("owner", "admin") ? fetchAllOptional("staff", "name") : Promise.resolve({ data: [] }),
+    roleIn("owner", "admin", "accounts") ? fetchAllSafe("staff", "name", true, true) : Promise.resolve({ data: [] }),
     fetchAll("agent_requests", "created_at", false),
     fetchAllOptional("contracts", "created_at", false),
     roleIn("owner", "accounts", "admin") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
@@ -183,6 +185,8 @@ async function loadData() {
   state.submissions = requireData(sb, "Could not load deal submissions");
   const cbmonths = availableMonths(state.cashMovements, "month");
   if (!state.cbMonth || !cbmonths.includes(state.cbMonth)) state.cbMonth = cbmonths[0] || null;
+  const cemonths = availableMonths(state.commission, "month");
+  if (!state.ceMonth || !cemonths.includes(state.ceMonth)) state.ceMonth = cemonths[0] || null;
   const months = availableMonths(state.deals, "month");
   if (!state.txMonth || !months.includes(state.txMonth)) state.txMonth = months[0] || null;
   const lmonths = availableMonths(state.commission, "month");
@@ -220,12 +224,12 @@ async function reloadRequests() {
 }
 
 async function reloadContacts() {
-  const result = await fetchAll("contacts", "name");
+  const result = await fetchAllSafe("contacts", "name", true, true);
   state.contacts = requireData(result, "Could not reload contacts");
 }
 
 async function reloadCashMovements() {
-  const result = await fetchAll("cash_movements", "movement_date", false);
+  const result = await fetchAllSafe("cash_movements", "movement_date", false);
   state.cashMovements = requireData(result, "Could not reload cash and bank movements");
   const cbmonths = availableMonths(state.cashMovements, "month");
   if (!state.cbMonth || !cbmonths.includes(state.cbMonth)) state.cbMonth = cbmonths[0] || null;
@@ -772,7 +776,10 @@ function contractInput(id, label, value, type = "text", extra = "") {
 function viewContractModal() {
   const f = state.contractForm;
   if (!f) return "";
-  const options = `<option value="" ${!f.deal_group ? "selected" : ""}>— No linked deal —</option>` + dealGroupOptions().map((o) => `<option value="${o.group}" ${o.group === f.deal_group ? "selected" : ""}>${esc(o.label)}</option>`).join("");
+  const dealResolvable = !f.deal_group || dealGroupOptions().some((o) => o.group === f.deal_group);
+  const options = `<option value="" ${!f.deal_group ? "selected" : ""}>— No linked deal —</option>`
+    + (dealResolvable ? "" : `<option value="${esc(f.deal_group)}" selected>— Linked deal (removed from register) —</option>`)
+    + dealGroupOptions().map((o) => `<option value="${o.group}" ${o.group === f.deal_group ? "selected" : ""}>${esc(o.label)}</option>`).join("");
   const d = f.details || {}, a = f.addendum || {};
   return `<div class="modal-backdrop"><div class="modal contract-modal" role="dialog" aria-modal="true" aria-labelledby="contracttitle">
     <div class="modal-head"><h3 id="contracttitle">${f.id ? `Edit ${esc(f.contract_no)}` : "New tenancy contract draft"}</h3><button class="modal-close" id="contractclose" aria-label="Close">×</button></div>
@@ -824,8 +831,9 @@ async function saveContract(status) {
   const result = await supabase.rpc("save_contract", payload);
   if (result.error) { msg.textContent = result.error.message; buttons.forEach((button)=>button.disabled=false); return; }
   const fromSubmission = state.contractForm?.fromSubmission;
-  state.contractForm = null; await reloadAfterWrite(reloadContracts, status === "final" ? "Final contract" : "Contract draft");
-  if (fromSubmission) {
+  state.contractForm = null;
+  const reloaded = await reloadAfterWrite(reloadContracts, status === "final" ? "Final contract" : "Contract draft");
+  if (fromSubmission && reloaded) {
     // Close the loop: the agent sees their submission turn into a contract, and
     // the documents they uploaded (cheque copies, IDs) follow the deal through
     // to Accounts instead of being stranded on the submission.
@@ -1005,7 +1013,7 @@ function viewDashboard() {
     <div class="md-kpi"><span class="card-kicker">Total commission</span><span class="md-kpi-value">${money(Math.round(totc))}</span><span class="md-kpi-detail">Incl. third-party share</span></div>
     <div class="md-kpi"><span class="card-kicker">Expiring ≤90 days</span><span class="md-kpi-value">${expiringSoon}</span><span class="md-kpi-detail">${tiers[0].items.length} already expired</span></div>
   </section>`;
-  const cashDates = availableMonths(state.cash, "as_at");
+  const cashDates = availableDates(state.cash, "as_at");
   const cashRows = state.cash.filter((c) => c.as_at === state.cashDate);
   const isLatestCash = state.cashDate === cashDates[0];
   const cashDateOpts = cashDates.map((d) =>
@@ -1437,7 +1445,12 @@ function emptyDocForm() {
     amount: "", doc_date: todayIso(), payment_method: "", msg: "" };
 }
 function docFormFromRow(d) {
-  return { id: d.id, doc_type: d.doc_type, dealLabel: dealLabelFor(d.deal_group),
+  // If the linked deal no longer exists in the register, present a blank field
+  // (so editing isn't blocked) but remember the original link and keep it
+  // unless the user picks a different deal.
+  const resolved = d.deal_group ? dealGroupOptions().find((o) => o.group === d.deal_group) : null;
+  return { id: d.id, doc_type: d.doc_type, dealLabel: resolved ? resolved.label : "",
+    deal_group: d.deal_group || null, keepGroup: !!d.deal_group && !resolved,
     client: d.client || "", description: d.description || "", amount: d.amount ?? "",
     doc_date: d.doc_date || "", payment_method: d.payment_method || "", msg: "", status: d.status };
 }
@@ -1496,7 +1509,7 @@ async function saveDoc() {
   const type = g("d_type");
   const btn = document.getElementById("docsave"); btn.disabled = true; btn.textContent = "Saving…";
   const rec = {
-    doc_type: type, deal_group: opt ? opt.group : null, client: g("d_client") || null,
+    doc_type: type, deal_group: opt ? opt.group : (!label && f.keepGroup ? f.deal_group : null), client: g("d_client") || null,
     description: g("d_desc") || null, amount: parseFloat(g("d_amount")),
     doc_date: g("d_date"), month: g("d_date").slice(0, 7),
     payment_method: g("d_pay") || null,
@@ -1585,7 +1598,7 @@ function collectCashForm() {
   });
 }
 function openCashForm() {
-  const dates = availableMonths(state.cash, "as_at");
+  const dates = availableDates(state.cash, "as_at");
   const latest = state.cash.filter((c) => c.as_at === dates[0]);
   state.cashForm = {
     as_at: todayIso(),
@@ -2174,17 +2187,18 @@ function dailyControl() {
 function dashboardSearch(query) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
+  const can = { contacts: roleIn("owner", "admin"), contracts: roleIn("owner", "admin"), transactions: roleIn("owner", "accounts") };
   const out = [];
-  for (const c of state.contacts) {
+  if (can.contacts) for (const c of state.contacts) {
     if ([c.name, c.phone, c.email, c.contact_type].join(" ").toLowerCase().includes(q))
       out.push({ screen: "contacts", label: `Contact · ${c.name}`, detail: `${c.contact_type} · ${c.phone || c.email || ""}`.trim() });
   }
-  for (const c of state.contracts) {
+  if (can.contracts) for (const c of state.contracts) {
     if ([c.contract_no, c.tenant_name, c.landlord_name].join(" ").toLowerCase().includes(q))
       out.push({ screen: "contracts", label: `Contract · ${c.contract_no || "draft"}`, detail: `${c.landlord_name || ""} → ${c.tenant_name || ""}` });
   }
   const seenDeal = new Set();
-  for (const d of state.deals) {
+  if (can.transactions) for (const d of state.deals) {
     if (seenDeal.has(d.group_id)) continue;
     if ([d.agent, d.building, d.unit, d.tenant, d.landlord].join(" ").toLowerCase().includes(q)) {
       seenDeal.add(d.group_id);
@@ -2514,7 +2528,16 @@ async function saveSubmission() {
   if (!payload.owner_name || !payload.tenant_name || !payload.building) { msg.textContent = "Owner name, tenant name, and building are required."; return; }
   const btn = document.getElementById("subsave"); btn.disabled = true; btn.textContent = "Saving…";
   let error, id = f.savedId;
-  if (id) ({ error } = await supabase.from("deal_submissions").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", id));
+  if (id) {
+    // .select() makes RLS-blocked updates visible: no error + zero rows means
+    // the database refused the write, so never claim it was saved.
+    const upd = await supabase.from("deal_submissions").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", id).select("id");
+    error = upd.error;
+    if (!error && !(upd.data || []).length) {
+      msg.textContent = "Your changes could not be saved — this submission can no longer be edited. Ask an admin to update it.";
+      btn.disabled = false; btn.textContent = "Save changes"; return;
+    }
+  }
   else {
     const ins = await supabase.from("deal_submissions").insert({
       ...payload, submitted_by_name: state.profile.full_name || state.profile.email, agent_name: state.profile.agent_name || null,
@@ -2748,6 +2771,9 @@ async function deleteCommissionEntry(id) {
 
 // ── wiring ───────────────────────────────────────────────
 function wireScreen() {
+  // Partial re-renders (search inputs etc.) replace <main> without re-running
+  // renderApp, so nav-style [data-screen] buttons inside views need wiring here.
+  root.querySelectorAll("main [data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   const retry = document.getElementById("retryload");
   if (retry) retry.onclick = async () => {
     retry.disabled = true; retry.textContent = "Loading…";
@@ -2991,6 +3017,11 @@ function wireModals() {
     else if (state.ceForm) { state.ceForm = null; render(); }
     else if (state.subForm) { state.subForm = null; render(); }
     else if (state.subView) { state.subView = null; render(); }
+    else if (state.dealForm) { state.dealForm = null; render(); }
+    else if (state.docForm) { state.docForm = null; render(); }
+    else if (state.cashForm) { state.cashForm = null; render(); }
+    else if (state.requestForm) { state.requestForm = null; render(); }
+    else if (state.pwForm) { state.pwForm = false; render(); }
     else if (state.contactForm) { state.contactForm = null; render(); }
     else if (state.cashMoveForm) { state.cashMoveForm = null; render(); }
   };
