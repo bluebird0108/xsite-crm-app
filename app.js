@@ -697,6 +697,46 @@ async function saveRequestReview(container) {
 }
 
 // ── view: tenancy contracts, addenda, renewals, Accounts tasks ──
+// Standard printed clauses on the scanned Xsite addendum pages, with their
+// measured positions. "Removing" a clause whites out its band on the print —
+// the text is part of the scanned letterhead, so this is the only way to
+// drop a line without redrawing the whole template.
+// Section headings get whited out too once every clause under them is removed.
+const ADDENDUM_SECTIONS = [
+  { page: 1, top: 18.1, h: 1.8, keys: ["use_a", "use_b", "use_c", "use_d", "use_e"] },
+  { page: 1, top: 34.1, h: 1.8, keys: ["ren_a", "ren_b", "ren_c"] },
+  { page: 1, top: 50.2, h: 1.8, keys: ["mnt_a", "mnt_b"] },
+  { page: 2, top: 10.8, h: 1.8, keys: ["chq_a"] },
+  { page: 2, top: 24.5, h: 1.8, keys: ["hnd_a", "hnd_b"] },
+  { page: 2, top: 36.2, h: 1.8, keys: ["reg_a"] },
+];
+function addendumWhiteouts(removed, page) {
+  const boxes = [];
+  (removed || []).forEach((k) => {
+    const cl = ADDENDUM_CLAUSES.find((x) => x.key === k && x.page === page);
+    if (cl) boxes.push(cl);
+  });
+  ADDENDUM_SECTIONS.filter((sec) => sec.page === page && sec.keys.every((k) => (removed || []).includes(k)))
+    .forEach((sec) => boxes.push(sec));
+  return boxes.map((b) => `<span class="clause-whiteout" style="top:${b.top}%;height:${b.h}%"></span>`).join("");
+}
+const ADDENDUM_CLAUSES = [
+  { key: "use_a", page: 1, label: "Use a — residential/single family, no subletting", top: 20.9, h: 4.8 },
+  { key: "use_b", page: 1, label: "Use b — no alterations without consent", top: 25.4, h: 1.7 },
+  { key: "use_c", page: 1, label: "Use c — no nuisance, respect by-laws", top: 26.9, h: 2.9 },
+  { key: "use_d", page: 1, label: "Use d — no illegal or immoral use", top: 29.5, h: 1.7 },
+  { key: "use_e", page: 1, label: "Use e — pets are allowed", top: 31.0, h: 1.8 },
+  { key: "ren_a", page: 1, label: "Renewal a — 3 months notice / 2 months penalty", top: 36.9, h: 4.4 },
+  { key: "ren_b", page: 1, label: "Renewal b — 90 days notice for rent increase (RERA)", top: 41.1, h: 4.6 },
+  { key: "ren_c", page: 1, label: "Renewal c — AED 1000 + VAT renewal admin charge", top: 45.5, h: 3.5 },
+  { key: "mnt_a", page: 1, label: "Maintenance a — major (>AED 500) on landlord", top: 52.7, h: 6.2 },
+  { key: "mnt_b", page: 1, label: "Maintenance b — minor (<AED 500) on tenant", top: 58.7, h: 6.8 },
+  { key: "chq_a", page: 2, label: "Bounced cheque — AED 1,000 penalty", top: 13.8, h: 7.8 },
+  { key: "hnd_a", page: 2, label: "Handover a — condition, keys, final bills", top: 27.6, h: 4.9 },
+  { key: "hnd_b", page: 2, label: "Handover b — inspection & deposit return", top: 32.2, h: 3.0 },
+  { key: "reg_a", page: 2, label: "Registration — Ejari at tenant's cost", top: 39.3, h: 3.4 },
+];
+
 function contractDraftFromDeal(deal) {
   return {
     id: null, deal_group: deal?.group_id || "", status: "draft",
@@ -818,6 +858,9 @@ function viewContractModal() {
     <div class="contract-form-section"><h4>Xsite addendum</h4><div class="form-grid">
       ${contractInput("ct_furnishing","Furnishing",a.furnishing)}${contractInput("ct_add_premises","Premises description",a.premises)}${contractInput("ct_add_unit","Unit number",a.unitNo)}${contractInput("ct_add_building","Building",a.building)}${contractInput("ct_add_area","Area / community",a.area)}${contractInput("ct_add_city","City / emirate",a.city)}
       <div class="field" style="grid-column:1/-1"><label for="ct_add_terms">Custom addendum conditions</label><textarea class="input" id="ct_add_terms" rows="5" maxlength="1000">${esc(a.customTerms || "")}</textarea><span class="text-muted" style="font-size:11px">Maximum 1,000 characters to keep signatures and footer visible.</span></div>
+      <div class="field" style="grid-column:1/-1"><label>Standard printed clauses — untick any line to remove it from the printed addendum</label>
+        <div class="clause-grid">${ADDENDUM_CLAUSES.map((c) => `<label class="clause-check"><input type="checkbox" id="ax_${c.key}" ${(a.removedClauses || []).includes(c.key) ? "" : "checked"}> ${esc(c.label)}</label>`).join("")}</div>
+      </div>
     </div></div>
     <div class="modal-actions"><span class="form-msg" id="contractmsg" aria-live="polite">${esc(f.msg || "")}</span><button class="btn btn-secondary" id="contractcancel">Cancel</button><button class="btn btn-secondary" id="contractdraft">Save draft</button><button class="btn btn-primary" id="contractfinal">Finalize & notify Accounts</button></div>
     </div></div></div>`;
@@ -832,7 +875,7 @@ async function saveContract(status) {
     p_landlord_name: value("ct_landlord"), p_tenant_name: value("ct_tenant"), p_owner_phone: value("ct_owner_phone"), p_tenant_phone: value("ct_tenant_phone"),
     p_annual_rent: Number(value("ct_rent")), p_security_deposit: Number(value("ct_deposit")), p_payment_mode: value("ct_payment"), p_additional_terms: value("ct_terms"),
     p_details: { lessorName:value("ct_landlord"), lessorEmiratesId:value("ct_lessor_id"), lessorEmail:value("ct_lessor_email"), lessorLicenseNo:value("ct_lessor_license"), lessorLicensingAuthority:value("ct_lessor_authority"), tenantEmiratesId:value("ct_tenant_id"), tenantEmail:value("ct_tenant_email"), tenantLicenseNo:value("ct_tenant_license"), tenantLicensingAuthority:value("ct_tenant_authority"), plotNo:value("ct_plot"), makaniNo:value("ct_makani"), buildingName:value("ct_building"), propertyNo:value("ct_unit"), propertyType:value("ct_property_type"), contractValue:value("ct_contract_value"), unitType:value("ct_unit_type"), propertyArea:value("ct_area_sqm"), location:value("ct_location"), premisesNo:value("ct_premises_no") },
-    p_addendum: { furnishing:value("ct_furnishing"), premises:value("ct_add_premises"), unitNo:value("ct_add_unit"), building:value("ct_add_building"), area:value("ct_add_area"), city:value("ct_add_city"), customTerms:value("ct_add_terms") },
+    p_addendum: { furnishing:value("ct_furnishing"), premises:value("ct_add_premises"), unitNo:value("ct_add_unit"), building:value("ct_add_building"), area:value("ct_add_area"), city:value("ct_add_city"), customTerms:value("ct_add_terms"), removedClauses: ADDENDUM_CLAUSES.filter((c) => document.getElementById("ax_" + c.key) && !document.getElementById("ax_" + c.key).checked).map((c) => c.key) },
   };
   if (!payload.p_contract_date || !payload.p_start_date || !payload.p_end_date || !payload.p_landlord_name || !payload.p_tenant_name || !Number.isFinite(payload.p_annual_rent) || payload.p_annual_rent < 0 || !Number.isFinite(payload.p_security_deposit) || payload.p_security_deposit < 0) { msg.textContent = "Valid dates, parties, and non-negative amounts are required."; return; }
   if (status === "final") {
@@ -903,8 +946,8 @@ function viewContractPrint() {
     </div>
     <div class="dld-print-page"><img src="./contract-assets/ejari-page-2.png" alt="DLD tenancy contract page 2">${fill(showDate(c.contract_date),"left:34%;top:94.7%;width:12%")}${fill(showDate(c.contract_date),"left:82%;top:94.7%;width:12%")}</div>
     <div class="dld-print-page"><img src="./contract-assets/ejari-page-3.png" alt="DLD tenancy contract page 3">${fill(c.additional_terms,"left:9.5%;top:36.7%;width:81%;height:16%;white-space:pre-line","dld-fill dld-terms-fill")}${fill(showDate(c.contract_date),"left:34%;top:91.6%;width:12%")}${fill(showDate(c.contract_date),"left:82%;top:91.6%;width:12%")}</div>
-    <div class="dld-print-page"><img src="./contract-assets/xsite-addendum-page-1.png" alt="Xsite addendum page 1">${fill(addendumDescription,"left:2.4%;top:14.6%;width:95%;background:white;padding:1px 4px","addendum-fill")}${fill(c.tenant_name,"left:9.5%;top:74.3%;width:35%;text-align:center","addendum-fill")}${fill(c.landlord_name,"left:52.5%;top:74.3%;width:35%;text-align:center","addendum-fill")}${fill(showDate(c.contract_date),"left:9.5%;top:79.4%;width:35%;text-align:center","addendum-fill")}${fill(showDate(c.contract_date),"left:52.5%;top:79.4%;width:35%;text-align:center","addendum-fill")}</div>
-    <div class="dld-print-page"><img src="./contract-assets/xsite-addendum-page-2.png" alt="Xsite addendum page 2">${a.customTerms ? fill(`ADDITIONAL MUTUALLY AGREED CONDITIONS\n${a.customTerms}`,"left:7%;top:64%;width:86%;min-height:12%;padding:6px","addendum-fill addendum-custom") : ""}${fill(c.tenant_name,"left:8%;top:52.8%;width:35%;text-align:center","addendum-fill")}${fill(c.landlord_name,"left:53%;top:52.8%;width:35%;text-align:center","addendum-fill")}${fill(showDate(c.contract_date),"left:8%;top:57.9%;width:35%;text-align:center","addendum-fill")}${fill(showDate(c.contract_date),"left:53%;top:57.9%;width:35%;text-align:center","addendum-fill")}</div>
+    <div class="dld-print-page"><img src="./contract-assets/xsite-addendum-page-1.png" alt="Xsite addendum page 1">${addendumWhiteouts(a.removedClauses, 1)}${fill(addendumDescription,"left:2.4%;top:14.6%;width:95%;background:white;padding:1px 4px","addendum-fill")}${fill(c.tenant_name,"left:9.5%;top:74.3%;width:35%;text-align:center","addendum-fill")}${fill(c.landlord_name,"left:52.5%;top:74.3%;width:35%;text-align:center","addendum-fill")}${fill(showDate(c.contract_date),"left:9.5%;top:79.4%;width:35%;text-align:center","addendum-fill")}${fill(showDate(c.contract_date),"left:52.5%;top:79.4%;width:35%;text-align:center","addendum-fill")}</div>
+    <div class="dld-print-page"><img src="./contract-assets/xsite-addendum-page-2.png" alt="Xsite addendum page 2">${addendumWhiteouts(a.removedClauses, 2)}${a.customTerms ? fill(`ADDITIONAL MUTUALLY AGREED CONDITIONS\n${a.customTerms}`,"left:7%;top:64%;width:86%;min-height:12%;padding:6px","addendum-fill addendum-custom") : ""}${fill(c.tenant_name,"left:8%;top:52.8%;width:35%;text-align:center","addendum-fill")}${fill(c.landlord_name,"left:53%;top:52.8%;width:35%;text-align:center","addendum-fill")}${fill(showDate(c.contract_date),"left:8%;top:57.9%;width:35%;text-align:center","addendum-fill")}${fill(showDate(c.contract_date),"left:53%;top:57.9%;width:35%;text-align:center","addendum-fill")}</div>
   </div>`;
 }
 
