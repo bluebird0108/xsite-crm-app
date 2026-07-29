@@ -291,6 +291,15 @@ table.grid.wide { min-width: 1700px; }
 .dash-search-item strong { font-size: 13px; }
 .dash-search-item span { font-size: 12px; }
 
+/* ── expiry / reminder rows (dashboard cards, renewal reminders) ── */
+.expiry-list { display: grid; gap: 4px; }
+.expiry-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--color-divider); }
+.expiry-row:last-child { border-bottom: 0; }
+
+/* invoice print — bill-to and details columns (companions to .inv-meta) */
+.inv-billto { display: grid; gap: 6px; align-content: start; }
+.inv-fields { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-content: start; align-items: center; }
+
 @media print {
   @page { size: A4; margin: 0; }
   body { background: #fff; }
