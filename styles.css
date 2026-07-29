@@ -200,6 +200,8 @@ table.grid.wide td { padding: 7px 7px; font-size: 10.5px; }
   border: 1px solid transparent; background: var(--color-neutral-100); cursor: pointer; margin-bottom: 6px;
 }
 .ledger-agent.is-active { border-color: var(--color-accent); }
+.ledger-agent-amt { flex: none; font-weight: 800; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--color-text); }
+.ledger-agent-amt.is-zero { color: var(--color-neutral-500); font-weight: 600; }
 .ledger-avatar {
   width: 34px; height: 34px; border-radius: 50%; background: var(--color-accent-100); color: var(--color-accent-800);
   display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; flex: none;

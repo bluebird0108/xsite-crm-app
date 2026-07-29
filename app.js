@@ -2066,10 +2066,20 @@ function viewLedgers() {
   const q = state.ledgerQuery.trim().toLowerCase();
   const teams = [...new Set(names.map(teamFor).filter(Boolean))].sort();
   const isAgent = state.profile.role === "agent";
+  // Commission received per agent for the active month — used to surface agents
+  // who actually have activity (so the ledger never opens on an empty statement).
+  const receivedFor = (name) => state.commission.reduce((s, r) =>
+    s + (sameAgent(r.agent_name, name) && (!state.ledgerMonth || r.month === state.ledgerMonth) ? (+r.received || 0) : 0), 0);
   const filtered = names.filter((n) =>
     (!q || n.toLowerCase().includes(q)) &&
-    (isAgent || state.ledgerTeam === "All" || teamFor(n) === state.ledgerTeam));
-  if (!state.selectedAgent || !filtered.includes(state.selectedAgent)) state.selectedAgent = filtered[0] || names[0] || null;
+    (isAgent || state.ledgerTeam === "All" || teamFor(n) === state.ledgerTeam))
+    // Agents with commission this month float to the top (highest first), then the rest A–Z.
+    .map((n) => ({ n, r: receivedFor(n) }))
+    .sort((a, b) => (b.r - a.r) || a.n.localeCompare(b.n))
+    .map((x) => x.n);
+  if (!state.selectedAgent || !filtered.includes(state.selectedAgent)) {
+    state.selectedAgent = filtered.find((n) => receivedFor(n) > 0) || filtered[0] || names[0] || null;
+  }
   const teamTabs = (!isAgent && teams.length) ? `<div class="tabs" style="margin-bottom:12px;flex-wrap:wrap">${["All", ...teams].map((t) => `<button class="tab ${state.ledgerTeam === t ? "is-active" : ""}" data-ledgerteam="${esc(t)}">${esc(t)}</button>`).join("")}</div>` : "";
   const lmonths = availableMonths(state.commission, "month");
   const lmonthTabs = lmonths.map((m) =>
@@ -2092,11 +2102,12 @@ function viewLedgers() {
       </div>
     </div>` ;
   })() : "";
-  const list = filtered.map((n) => `
+  const list = filtered.map((n) => { const rec = receivedFor(n); return `
     <button class="ledger-agent ${n === state.selectedAgent ? "is-active" : ""}" data-agent="${esc(n)}">
       <span class="ledger-avatar">${esc(n.split(" ").map((w) => w[0]).join("").slice(0, 2))}</span>
-      <span style="min-width:0"><span style="display:block;font-weight:700;font-size:13px">${esc(n)}</span>${teamFor(n) ? `<span class="text-muted" style="display:block;font-size:11px">${esc(teamFor(n))}</span>` : ""}</span>
-    </button>`).join("");
+      <span style="min-width:0;flex:1"><span style="display:block;font-weight:700;font-size:13px">${esc(n)}</span>${teamFor(n) ? `<span class="text-muted" style="display:block;font-size:11px">${esc(teamFor(n))}</span>` : ""}</span>
+      <span class="ledger-agent-amt ${rec ? "" : "is-zero"}">${rec ? money(Math.round(rec)) : "—"}</span>
+    </button>`; }).join("");
   const sheet = state.selectedAgent ? `
     <div class="ledger-metrics">
       <div class="ledger-metric"><span class="ledger-metric-label">Commission received</span><span class="ledger-metric-value">${money(Math.round(sum("received")))}</span></div>
