@@ -22,7 +22,7 @@ const state = {
   agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [], requests: [], contracts: [], accountTasks: [],
   contacts: [], cashMovements: [], contractFiles: [], submissions: [],
   selectedAgent: null,
-  txQuery: "", txType: "All", ledgerQuery: "", accTab: "master",
+  txQuery: "", txType: "All", ledgerQuery: "", ledgerTeam: "All", accTab: "master",
   txMonth: null, ledgerMonth: null, ceMonth: null, ceQuery: "", ceForm: null,
   invMonth: null, invType: "All", invQuery: "",
   cashDate: null,
@@ -94,7 +94,7 @@ const COLUMNS = {
   cash_position: "id,as_at,label,amount,sort_order,month",
   profiles: "id,full_name,email,role,agent_name,created_at",
   money_docs: "id,doc_type,doc_no,deal_group,doc_date,client,description,amount,payment_method,status,month,details",
-  staff: "id,name,job,nationality,branch,card_number,card_expiry,birthday",
+  staff: "id,name,job,nationality,branch,card_number,card_expiry,birthday,team",
   agent_requests: "id,created_by,submitter_name,request_type,subject,deal_group,details,status,response,created_at,updated_at",
   contracts: "id,contract_no,deal_group,status,contract_date,start_date,end_date,landlord_name,tenant_name,owner_phone,tenant_phone,annual_rent,security_deposit,payment_mode,additional_terms,details,addendum,ejari_status,created_by,finalized_by,finalized_at,created_at,updated_at",
   account_tasks: "id,contract_id,task_type,status,money_doc_id,completed_by,completed_at,created_at",
@@ -2048,10 +2048,16 @@ function ledgerAgentNames() {
   return allLedgerNames();
 }
 function viewLedgers() {
+  const teamFor = (name) => (state.staff.find((x) => (x.name || "").toUpperCase() === (name || "").toUpperCase()) || {}).team || null;
   const names = ledgerAgentNames();
   const q = state.ledgerQuery.trim().toLowerCase();
-  const filtered = names.filter((n) => !q || n.toLowerCase().includes(q));
-  if (!state.selectedAgent || !names.includes(state.selectedAgent)) state.selectedAgent = names[0] || null;
+  const teams = [...new Set(names.map(teamFor).filter(Boolean))].sort();
+  const isAgent = state.profile.role === "agent";
+  const filtered = names.filter((n) =>
+    (!q || n.toLowerCase().includes(q)) &&
+    (isAgent || state.ledgerTeam === "All" || teamFor(n) === state.ledgerTeam));
+  if (!state.selectedAgent || !filtered.includes(state.selectedAgent)) state.selectedAgent = filtered[0] || names[0] || null;
+  const teamTabs = (!isAgent && teams.length) ? `<div class="tabs" style="margin-bottom:12px;flex-wrap:wrap">${["All", ...teams].map((t) => `<button class="tab ${state.ledgerTeam === t ? "is-active" : ""}" data-ledgerteam="${esc(t)}">${esc(t)}</button>`).join("")}</div>` : "";
   const lmonths = availableMonths(state.commission, "month");
   const lmonthTabs = lmonths.map((m) =>
     `<button class="tab ${state.ledgerMonth === m ? "is-active" : ""}" data-ledgermonth="${m}">${monthLabel(m)}</button>`).join("");
@@ -2060,7 +2066,7 @@ function viewLedgers() {
   const list = filtered.map((n) => `
     <button class="ledger-agent ${n === state.selectedAgent ? "is-active" : ""}" data-agent="${esc(n)}">
       <span class="ledger-avatar">${esc(n.split(" ").map((w) => w[0]).join("").slice(0, 2))}</span>
-      <span style="min-width:0"><span style="display:block;font-weight:700;font-size:13px">${esc(n)}</span></span>
+      <span style="min-width:0"><span style="display:block;font-weight:700;font-size:13px">${esc(n)}</span>${teamFor(n) ? `<span class="text-muted" style="display:block;font-size:11px">${esc(teamFor(n))}</span>` : ""}</span>
     </button>`).join("");
   const sheet = state.selectedAgent ? `
     <div class="ledger-metrics">
@@ -2083,6 +2089,7 @@ function viewLedgers() {
     <div class="ledger-layout">
       <aside class="ledger-panel">
         ${state.profile.role !== "agent" ? `<input class="input" id="lq" type="search" placeholder="Search agents…" value="${esc(state.ledgerQuery)}" style="margin-bottom:12px">` : ""}
+        ${teamTabs}
         ${list || `<div class="md-empty">No agents.</div>`}
       </aside>
       <div style="min-width:0">${sheet}</div>
@@ -3140,6 +3147,7 @@ function wireScreen() {
   root.querySelectorAll("[data-txtype]").forEach((b) => b.onclick = () => { state.txType = b.dataset.txtype; rerenderTx(); });
   root.querySelectorAll("[data-txmonth]").forEach((b) => b.onclick = () => { state.txMonth = b.dataset.txmonth; rerenderTx(); });
   root.querySelectorAll("[data-ledgermonth]").forEach((b) => b.onclick = () => { state.ledgerMonth = b.dataset.ledgermonth; rerenderLedgers(); });
+  root.querySelectorAll("[data-ledgerteam]").forEach((b) => b.onclick = () => { state.ledgerTeam = b.dataset.ledgerteam; rerenderLedgers(); });
   const lq = document.getElementById("lq");
   if (lq) lq.oninput = () => { state.ledgerQuery = lq.value; rerenderLedgers(); };
   root.querySelectorAll("[data-agent]").forEach((b) => b.onclick = () => { state.selectedAgent = b.dataset.agent; rerenderLedgers(); });
