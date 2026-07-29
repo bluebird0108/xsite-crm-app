@@ -154,7 +154,7 @@ async function loadData() {
     fetchAll("deals", "sno"),
     fetchAll("commission_entries", "agent_name"),
     roleIn("owner", "accounts", "admin") ? fetchAll("cash_position", "sort_order") : Promise.resolve({ data: [] }),
-    roleIn("owner") ? fetchAll("profiles", "created_at") : Promise.resolve({ data: [] }),
+    roleIn("owner", "admin") ? fetchAll("profiles", "created_at") : Promise.resolve({ data: [] }),
     roleIn("owner", "accounts", "admin") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
     roleIn("owner", "admin") ? fetchAllOptional("staff", "name") : Promise.resolve({ data: [] }),
     fetchAll("agent_requests", "created_at", false),
@@ -369,7 +369,7 @@ function navLink(screen, label) {
 }
 function renderApp() {
   const p = state.profile;
-  const showTeam = roleIn("owner");
+  const showTeam = roleIn("owner", "admin");
   const pendingTeam = state.team.filter((t) => t.role === "pending").length;
   const pendingRequests = state.requests.filter((request) => request.status === "pending").length;
   const pendingAccountTasks = state.accountTasks.filter((task) => task.status === "pending").length;
@@ -837,26 +837,35 @@ function viewContractPrint() {
   </div>`;
 }
 
-// ── view: team management (owner) ────────────────────────
+// ── view: team management (owner + admin) ────────────────
+// Owner and Admin can both assign roles. Only an Owner may grant or remove the
+// Owner role, so an admin cannot promote themselves or lock the owner out.
 function viewTeam() {
+  const isOwner = roleIn("owner");
   const agentNames = [...new Set(state.commission.map((r) => r.agent_name))].sort();
-  const roleOpts = (cur) => ["pending", "agent", "accounts", "admin", "owner"]
+  const assignable = isOwner ? ["pending", "agent", "accounts", "admin", "owner"] : ["pending", "agent", "accounts", "admin"];
+  const roleOpts = (cur) => (assignable.includes(cur) ? assignable : [...assignable, cur])
     .map((r) => `<option value="${r}" ${r === cur ? "selected" : ""}>${r}</option>`).join("");
   const agentOpts = (cur) => `<option value="">— none —</option>` + agentNames
     .map((n) => `<option value="${esc(n)}" ${n === cur ? "selected" : ""}>${esc(n)}</option>`).join("");
-  const rows = state.team.map((t) => `
+  const rows = state.team.map((t) => {
+    // Admins may view owner accounts but not modify them.
+    const locked = !isOwner && t.role === "owner";
+    return `
     <tr data-uid="${t.id}">
       <td>${esc(t.full_name || "—")}</td>
       <td>${esc(t.email || "—")}</td>
       <td>${t.role === "pending" ? `<span class="tag tag-accent">pending</span>` : `<span class="tag tag-neutral">${esc(t.role)}</span>`}</td>
-      <td><select class="input" data-role style="padding:7px 10px">${roleOpts(t.role)}</select></td>
-      <td><select class="input" data-agentname style="padding:7px 10px">${agentOpts(t.agent_name)}</select></td>
-      <td><button class="btn btn-primary" data-save>Save</button></td>
-    </tr>`).join("");
+      <td>${locked ? `<span class="text-muted" style="font-size:12px">Owner — only an owner can change this</span>`
+        : `<select class="input" data-role style="padding:7px 10px">${roleOpts(t.role)}</select>`}</td>
+      <td>${locked ? "—" : `<select class="input" data-agentname style="padding:7px 10px">${agentOpts(t.agent_name)}</select>`}</td>
+      <td>${locked ? "" : `<button class="btn btn-primary" data-save>Save</button>`}</td>
+    </tr>`;
+  }).join("");
   return `
   <div>
-    <div style="margin-bottom:20px"><span class="card-kicker">Owner / Team</span><h1 style="margin-top:4px">Team &amp; Access</h1>
-    <p class="text-muted" style="margin:0">New signups appear here as <strong>pending</strong>. Assign a role to grant access; link agents to their ledger name.</p></div>
+    <div style="margin-bottom:20px"><span class="card-kicker">${isOwner ? "Owner" : "Admin"} / Team</span><h1 style="margin-top:4px">Team &amp; Access</h1>
+    <p class="text-muted" style="margin:0">New signups appear here as <strong>pending</strong>. Assign a role to grant access; link agents to their ledger name.${isOwner ? "" : " Owner accounts can only be changed by an owner."}</p></div>
     <div class="sheet"><div class="sheet-hint">Everyone with an account · role changes apply immediately</div>
     <div class="table-wrap"><table class="grid">
       <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Assign role</th><th>Agent ledger link</th><th></th></tr></thead>
@@ -875,8 +884,21 @@ async function saveTeamRow(tr) {
   const ownerCount = state.team.filter((member) => member.role === "owner").length;
   const target = state.team.find((member) => member.id === uid);
   if (target?.role === "owner" && role !== "owner" && ownerCount <= 1) { msg.textContent = "The last owner cannot be demoted."; return; }
+  // Only an owner may grant or remove the owner role.
+  if (!roleIn("owner") && (role === "owner" || target?.role === "owner")) {
+    msg.textContent = "Only an owner can assign or change the Owner role.";
+    return;
+  }
   const btn = tr.querySelector("[data-save]"); btn.disabled = true; btn.textContent = "Saving…";
-  const { error } = await supabase.from("profiles").update({ role, agent_name }).eq("id", uid);
+  // Prefer the RPC, which re-checks the owner-role rule server-side. Falls back
+  // to a direct update where that function has not been created yet.
+  let error = null;
+  const rpcResult = await supabase.rpc("set_member_role", { p_id: uid, p_role: role, p_agent_name: agent_name });
+  if (rpcResult.error && /function|does not exist|schema cache/i.test(rpcResult.error.message)) {
+    ({ error } = await supabase.from("profiles").update({ role, agent_name }).eq("id", uid));
+  } else {
+    error = rpcResult.error;
+  }
   if (error) { msg.textContent = "Could not save: " + error.message; btn.disabled = false; btn.textContent = "Save"; return; }
   const t = state.team.find((x) => x.id === uid);
   if (t) { t.role = role; t.agent_name = agent_name; }
