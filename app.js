@@ -270,7 +270,11 @@ async function boot() {
     catch (error) { state.fatalError = error.message; }
   }
   render();
+  // Arriving from a password-reset email: drop them straight into the
+  // change-password box instead of leaving them to hunt for it.
+  if (/type=recovery/.test(window.location.hash || "")) state.pwForm = true;
   supabase.auth.onAuthStateChange(async (_e, s) => {
+    if (_e === "PASSWORD_RECOVERY") { state.pwForm = true; render(); }
     if (s && !state.profile) {
       try { await resolveProfile(s); await loadData(); }
       catch (error) { state.fatalError = error.message; }
@@ -314,7 +318,7 @@ function renderLogin(msg) {
         <p class="login-msg" style="margin-top:14px">
           ${state.authMode === "signup"
             ? `Already registered? <a id="switchmode" style="cursor:pointer">Sign in</a>`
-            : `New team member? <a id="switchmode" style="cursor:pointer">Create your account</a> · <a id="send" style="cursor:pointer">Email me a sign-in link</a>`}
+            : `New team member? <a id="switchmode" style="cursor:pointer">Create your account</a> · <a id="send" style="cursor:pointer">Email me a sign-in link</a><br><a id="forgot" style="cursor:pointer">Forgot your password?</a>`}
         </p>
         <p class="login-msg ${msg ? msg.kind : ""}" id="msg">${msg ? esc(msg.text) : ""}</p>
         <p class="login-security-note">Authorized Xsite personnel only · Dubai, UAE</p>
@@ -325,6 +329,8 @@ function renderLogin(msg) {
   document.getElementById("switchmode").onclick = () => { state.authMode = state.authMode === "signup" ? "signin" : "signup"; renderLogin(); };
   const send = document.getElementById("send");
   if (send) send.onclick = sendLink;
+  const forgot = document.getElementById("forgot");
+  if (forgot) forgot.onclick = forgotPassword;
   document.getElementById("password").addEventListener("keydown", (e) => { if (e.key === "Enter") (state.authMode === "signup" ? signUp : signInPassword)(); });
   if (msg && msg.email) document.getElementById("email").value = msg.email;
 }
@@ -359,6 +365,14 @@ async function signUp() {
     state.authMode = "signin";
     renderLogin({ kind: "is-ok", text: "Account created. Confirm via the email we sent, then sign in.", email });
   }
+}
+
+async function forgotPassword() {
+  const email = document.getElementById("email").value.trim();
+  if (!email) { renderLogin({ kind: "is-error", text: "Enter your work email first, then choose Forgot your password." }); return; }
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + window.location.pathname });
+  if (error) renderLogin({ kind: "is-error", text: error.message, email });
+  else renderLogin({ kind: "is-ok", text: "Password reset link sent. Open it from your email to choose a new password.", email });
 }
 
 async function sendLink() {
@@ -888,13 +902,15 @@ function viewTeam() {
       <td>${locked ? `<span class="text-muted" style="font-size:12px">Owner — only an owner can change this</span>`
         : `<select class="input" data-role style="padding:7px 10px">${roleOpts(t.role)}</select>`}</td>
       <td>${locked ? "—" : `<select class="input" data-agentname style="padding:7px 10px">${agentOpts(t.agent_name)}</select>`}</td>
-      <td>${locked ? "" : `<button class="btn btn-primary" data-save>Save</button>`}</td>
+      <td style="white-space:nowrap">${locked ? "" : `<button class="btn btn-primary btn-mini" data-save>Save</button>
+        <button class="btn btn-secondary btn-mini" data-resetpw="${esc(t.email || "")}">Reset password</button>
+        ${t.id === state.profile.id ? "" : `<button class="btn btn-secondary btn-mini" data-removemember="${t.id}">Remove access</button>`}`}</td>
     </tr>`;
   }).join("");
   return `
   <div>
     <div style="margin-bottom:20px"><span class="card-kicker">${isOwner ? "Owner" : "Admin"} / Team</span><h1 style="margin-top:4px">Team &amp; Access</h1>
-    <p class="text-muted" style="margin:0">New signups appear here as <strong>pending</strong>. Assign a role to grant access; link agents to their ledger name.${isOwner ? "" : " Owner accounts can only be changed by an owner."}</p></div>
+    <p class="text-muted" style="margin:0">New signups appear here as <strong>pending</strong>. Assign a role to grant access; link agents to their ledger name. <strong>Reset password</strong> emails a secure link; <strong>Remove access</strong> returns the account to pending.${isOwner ? "" : " Owner accounts can only be changed by an owner."}</p></div>
     <div class="sheet"><div class="sheet-hint">Everyone with an account · role changes apply immediately</div>
     <div class="table-wrap"><table class="grid">
       <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Assign role</th><th>Agent ledger link</th><th></th></tr></thead>
@@ -902,6 +918,41 @@ function viewTeam() {
     </table></div></div>
     <p class="text-muted" style="font-size:12px;margin-top:10px" id="teammsg"></p>
   </div>`;
+}
+
+// Password recovery: we cannot set another person's password from the browser
+// (that needs a service-role key, which must never ship to a client), so the
+// owner/admin sends them a secure reset link instead.
+async function sendPasswordReset(email) {
+  const msg = document.getElementById("teammsg");
+  if (!email) { msg.textContent = "That account has no email address on file."; return; }
+  if (!window.confirm(`Send a password reset link to ${email}?`)) return;
+  msg.textContent = "Sending…";
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + window.location.pathname });
+  msg.textContent = error ? `Could not send: ${error.message}` : `Reset link sent to ${email}. They set a new password from that email.`;
+}
+
+// Revokes every permission immediately by returning the account to "pending".
+// The person stays listed so access can be restored without a fresh signup.
+async function removeMember(uid) {
+  const target = state.team.find((m) => m.id === uid);
+  const msg = document.getElementById("teammsg");
+  if (!target) return;
+  if (target.id === state.profile.id) { msg.textContent = "You cannot remove your own access."; return; }
+  if (!roleIn("owner") && target.role === "owner") { msg.textContent = "Only an owner can remove an owner."; return; }
+  if (target.role === "owner" && state.team.filter((m) => m.role === "owner").length <= 1) { msg.textContent = "The last owner cannot be removed."; return; }
+  if (!window.confirm(`Remove access for ${target.full_name || target.email}?\n\nThey will be signed out of every section and returned to "pending" until re-approved.`)) return;
+  msg.textContent = "Removing…";
+  let error = null;
+  const rpc = await supabase.rpc("set_member_role", { p_id: uid, p_role: "pending", p_agent_name: null });
+  if (rpc.error && /function|does not exist|schema cache/i.test(rpc.error.message)) {
+    ({ error } = await supabase.from("profiles").update({ role: "pending", agent_name: null }).eq("id", uid));
+  } else error = rpc.error;
+  if (error) { msg.textContent = "Could not remove: " + error.message; return; }
+  const t = state.team.find((x) => x.id === uid);
+  if (t) { t.role = "pending"; t.agent_name = null; }
+  msg.textContent = `${target.full_name || target.email} no longer has access.`;
+  const main = root.querySelector("main"); main.innerHTML = viewTeam(); wireScreen();
 }
 
 async function saveTeamRow(tr) {
@@ -2541,6 +2592,8 @@ function wireScreen() {
   if (lq) lq.oninput = () => { state.ledgerQuery = lq.value; rerenderLedgers(); };
   root.querySelectorAll("[data-agent]").forEach((b) => b.onclick = () => { state.selectedAgent = b.dataset.agent; rerenderLedgers(); });
   root.querySelectorAll("[data-save]").forEach((b) => b.onclick = () => saveTeamRow(b.closest("tr")));
+  root.querySelectorAll("[data-resetpw]").forEach((b) => b.onclick = () => sendPasswordReset(b.dataset.resetpw));
+  root.querySelectorAll("[data-removemember]").forEach((b) => b.onclick = () => removeMember(b.dataset.removemember));
   const nd = document.getElementById("newdeal");
   if (nd) nd.onclick = () => { state.dealForm = emptyDealForm(); render(); };
   const exportTx = document.getElementById("exporttx"); if (exportTx) exportTx.onclick = exportTransactions;
