@@ -540,45 +540,79 @@ function viewStaff() {
   const expired = state.staff.filter((s) => permitStatus(s).status === "expired");
   const expiringSoon = state.staff.filter((s) => permitStatus(s).status === "expiring");
   const attention = [...expired, ...expiringSoon].sort((a, b) => a.card_expiry.localeCompare(b.card_expiry));
-  const body = rows.map((s) => {
+  const canEdit = roleIn("owner", "admin");
+  const permitMeta = {
+    expired: { label: "Permit expired", cls: "is-expired" },
+    expiring: { label: "Expiring soon", cls: "is-expiring" },
+    valid: { label: "Permit valid", cls: "is-valid" },
+    missing: { label: "No permit date", cls: "is-missing" },
+  };
+  const permitDetail = (s, permit) => permit.status === "missing" ? "No card expiry on file"
+    : permit.status === "expired" ? `${showDate(s.card_expiry)} · ${Math.abs(permit.days)}d overdue`
+    : permit.status === "expiring" ? `${showDate(s.card_expiry)} · ${permit.days}d left`
+    : `Valid to ${showDate(s.card_expiry)}`;
+  const cards = rows.map((s) => {
     const permit = permitStatus(s);
-    const expClass = permit.status === "expired" ? "expiry-days is-overdue" : permit.status === "expiring" ? "expiry-days" : "";
-    const expLabel = permit.status === "missing" ? "—" : permit.status === "expired"
-      ? `${showDate(s.card_expiry)} · ${Math.abs(permit.days)}d overdue`
-      : permit.status === "expiring" ? `${showDate(s.card_expiry)} · ${permit.days}d` : showDate(s.card_expiry);
-    return `<tr>
-      <td>${esc(s.name)}</td><td>${esc(s.job || "—")}</td><td>${esc(s.nationality || "—")}</td>
-      <td>${esc(s.branch || "—")}</td><td>${esc(s.card_number || "—")}</td>
-      <td><span class="${expClass}">${esc(expLabel)}</span></td>
-      <td>${s.birthday && isoRe.test(s.birthday) ? esc(showDate(s.birthday)) : "—"}</td>
-      ${roleIn("owner", "admin") ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editstaff="${s.id}">Edit</button><button class="btn btn-secondary btn-mini" data-delstaff="${s.id}">Delete</button></div></td>` : ""}</tr>`;
+    const meta = permitMeta[permit.status] || permitMeta.missing;
+    return `<article class="staff-card ${meta.cls}">
+      <div class="staff-card-top">
+        <div class="staff-avatar">${esc(initials(s.name))}</div>
+        <div class="staff-id">
+          <h4 class="staff-name">${esc(s.name)}</h4>
+          <span class="staff-job">${esc(s.job || "—")}</span>
+        </div>
+        ${canEdit ? `<div class="staff-menu row-actions">
+          <button class="btn btn-secondary btn-mini" data-editstaff="${s.id}">Edit</button>
+          <button class="btn btn-secondary btn-mini" data-delstaff="${s.id}">Delete</button>
+        </div>` : ""}
+      </div>
+      <div class="staff-permit">
+        <span class="permit-badge ${meta.cls}">${meta.label}</span>
+        <span class="permit-detail">${esc(permitDetail(s, permit))}</span>
+      </div>
+      <dl class="staff-meta">
+        <div><dt>Nationality</dt><dd>${esc(s.nationality || "—")}</dd></div>
+        <div><dt>Branch</dt><dd>${esc(s.branch || "—")}</dd></div>
+        <div><dt>Card no</dt><dd>${esc(s.card_number || "—")}</dd></div>
+        <div><dt>Birthday</dt><dd>${s.birthday && isoRe.test(s.birthday) ? esc(showDate(s.birthday)) : "—"}</dd></div>
+      </dl>
+    </article>`;
   }).join("");
   return `
   <div>
     <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div><span class="card-kicker">Owner / HR</span><h1 style="margin-top:4px">Staff Directory</h1><p class="text-muted" style="margin:0">${state.staff.length} employees across Main and Branch offices.</p></div>
-      ${roleIn("owner", "admin") ? `<button class="btn btn-primary" id="newstaff">+ Add staff</button>` : ""}
+      ${canEdit ? `<button class="btn btn-primary" id="newstaff">+ Add staff</button>` : ""}
     </div>
     ${attention.length ? `
     <section class="md-section" style="margin-bottom:20px">
       <div class="md-section-header"><h3>Work permits requiring attention</h3><span class="tag tag-accent">${expired.length} expired · ${expiringSoon.length} within 60 days</span></div>
-      <div class="table-wrap"><table class="grid"><thead><tr><th>Name</th><th>Job</th><th>Branch</th><th>Card no</th><th>Expiry</th></tr></thead><tbody>
-        ${attention.map((s)=>{const permit=permitStatus(s);return `<tr><td>${esc(s.name)}</td><td>${esc(s.job||"—")}</td><td>${esc(s.branch)}</td><td>${esc(s.card_number)}</td><td><span class="${permit.status === "expired" ? "expiry-days is-overdue" : "expiry-days"}">${showDate(s.card_expiry)} · ${permit.status === "expired" ? Math.abs(permit.days)+"d overdue" : permit.days+"d"}</span></td></tr>`;}).join("")}
-      </tbody></table></div>
+      <div class="permit-alerts">
+        ${attention.map((s) => { const permit = permitStatus(s); const isExp = permit.status === "expired"; return `
+          <div class="permit-alert ${isExp ? "is-expired" : "is-expiring"}">
+            <span class="stripe"></span>
+            <div class="permit-alert-id"><strong>${esc(s.name)}</strong><span>${esc(s.job || "—")} · ${esc(s.branch || "—")}</span></div>
+            <span class="permit-alert-days">${isExp ? Math.abs(permit.days) + "d overdue" : "in " + permit.days + "d"}</span>
+            <span class="permit-alert-date">${esc(showDate(s.card_expiry))}</span>
+          </div>`; }).join("")}
+      </div>
     </section>` : ""}
     <div class="tx-toolbar">
       <div class="tabs">${branchTabs}</div>
       <input class="input" id="staffq" type="search" placeholder="Search name, job, nationality, card no…" value="${esc(state.staffQuery)}">
       <span class="text-muted" style="font-size:12px">${rows.length} shown</span>
     </div>
-    <div class="sheet">
-      <div class="sheet-hint">Full roster — from official labour work-permit lists</div>
-      <div class="table-wrap"><table class="grid" style="min-width:900px">
-        <thead><tr><th>Name</th><th>Job</th><th>Nationality</th><th>Branch</th><th>Work-permit card</th><th>Card expiry</th><th>Birthday</th>${roleIn("owner", "admin") ? "<th></th>" : ""}</tr></thead>
-        <tbody>${body || `<tr><td colspan="7"><div class="md-empty" style="border:0">No employees match.</div></td></tr>`}</tbody>
-      </table></div>
-    </div>
+    ${rows.length ? `<div class="staff-grid">${cards}</div>` : `<div class="md-empty">No employees match the current search or branch filter.</div>`}
   </div>`;
+}
+
+// initials from a person's name — first + last significant word
+function initials(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "—";
+  const first = parts[0][0] || "";
+  const last = parts.length > 1 ? parts[parts.length - 1][0] || "" : "";
+  return (first + last).toUpperCase();
 }
 
 // ── view: agent requests (Stage 4) ───────────────────────

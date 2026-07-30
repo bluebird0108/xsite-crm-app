@@ -211,6 +211,73 @@ table.grid.wide td { padding: 7px 7px; font-size: 10.5px; }
 .expiry-tier { margin-bottom: var(--space-4); }
 .expiry-tier h4 { margin: 0 0 var(--space-2); }
 
+/* ── Staff directory (card grid) ─────────────────────────── */
+.staff-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+}
+.staff-card {
+  position: relative; display: flex; flex-direction: column; gap: var(--space-3);
+  padding: var(--space-4); padding-left: calc(var(--space-4) + 4px);
+  background: #fff; border: 1px solid var(--color-divider);
+  transition: box-shadow 150ms ease, transform 150ms ease;
+}
+.staff-card::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  background: var(--color-neutral-400);
+}
+.staff-card.is-expired::before { background: var(--sev-crit); }
+.staff-card.is-expiring::before { background: var(--sev-warn); }
+.staff-card.is-valid::before { background: var(--sev-ok); }
+.staff-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.staff-card-top { display: flex; align-items: flex-start; gap: 11px; }
+.staff-avatar {
+  width: 40px; height: 40px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--color-accent-100); color: var(--color-accent-800);
+  font-weight: 800; font-size: 13px; letter-spacing: .01em;
+}
+.staff-id { min-width: 0; flex: 1; }
+.staff-name { margin: 0; font-size: 15px; line-height: 1.18; letter-spacing: -.01em; }
+.staff-job { display: block; margin-top: 2px; color: var(--color-neutral-600); font-size: 12px; }
+.staff-menu {
+  position: absolute; top: var(--space-3); right: var(--space-3); z-index: 1;
+  opacity: 0; pointer-events: none; transition: opacity 120ms ease;
+  background: color-mix(in srgb, #fff 88%, transparent); padding: 2px;
+}
+.staff-card:hover .staff-menu, .staff-card:focus-within .staff-menu { opacity: 1; pointer-events: auto; }
+.staff-permit { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.permit-badge {
+  display: inline-block; padding: 4px 9px; font-size: 10px; font-weight: 800;
+  letter-spacing: .07em; text-transform: uppercase; border: 1px solid transparent;
+}
+.permit-badge.is-expired { color: #fff; background: var(--sev-crit); }
+.permit-badge.is-expiring { color: #fff; background: var(--sev-warn); }
+.permit-badge.is-valid { color: var(--sev-ok); background: color-mix(in srgb, var(--sev-ok) 12%, #fff); border-color: color-mix(in srgb, var(--sev-ok) 30%, transparent); }
+.permit-badge.is-missing { color: var(--color-neutral-700); background: var(--color-neutral-200); border-color: var(--color-divider); }
+.permit-detail { font-size: 11.5px; color: var(--color-neutral-700); font-variant-numeric: tabular-nums; }
+.staff-card.is-expired .permit-detail { color: var(--sev-crit); font-weight: 700; }
+.staff-meta {
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2) var(--space-3);
+  margin: 0; padding-top: var(--space-3); border-top: 1px solid var(--color-neutral-200);
+}
+.staff-meta dt { color: var(--color-neutral-600); font-size: 9.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.staff-meta dd { margin: 2px 0 0; font-size: 13px; font-weight: 600; word-break: break-word; }
+
+/* Work-permit attention strip */
+.permit-alerts { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--space-2); }
+.permit-alert { display: grid; grid-template-columns: 4px 1fr auto; align-items: center; gap: 12px; padding: 10px 12px 10px 0; background: #fff; border: 1px solid var(--color-divider); }
+.permit-alert .stripe { align-self: stretch; }
+.permit-alert.is-expired .stripe { background: var(--sev-crit); }
+.permit-alert.is-expiring .stripe { background: var(--sev-warn); }
+.permit-alert-id { min-width: 0; }
+.permit-alert-id strong { display: block; font-size: 13.5px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.permit-alert-id span { font-size: 11px; color: var(--color-neutral-600); }
+.permit-alert-days { grid-row: 1; grid-column: 3; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.permit-alert.is-expired .permit-alert-days { color: var(--sev-crit); }
+.permit-alert.is-expiring .permit-alert-days { color: var(--sev-warn); }
+.permit-alert-date { grid-column: 3; font-size: 10px; color: var(--color-neutral-500); text-align: right; font-variant-numeric: tabular-nums; }
+
 /* ── Ledger ──────────────────────────────────────────────── */
 .ledger-layout { display: grid; grid-template-columns: 250px minmax(0,1fr); gap: var(--space-5); align-items: start; }
 .ledger-panel { max-height: calc(100vh - 120px); overflow: auto; }
