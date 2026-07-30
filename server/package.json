@@ -1,0 +1,20 @@
+{
+  "name": "xsite-crm-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Self-hosted backend for the XSITE CRM (replaces Supabase: auth, Postgres data, RPCs, file storage).",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "migrate": "node migrate.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.2.0",
+    "pg": "^8.13.1"
+  }
+}

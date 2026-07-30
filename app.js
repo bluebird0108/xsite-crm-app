@@ -1,5 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.110.9";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
+import { createClient } from "./api.js";
 import {
   availableDates,
   availableMonths,
@@ -11,7 +10,7 @@ import {
   toCsv,
 } from "./core.js";
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabase = createClient();
 const root = document.getElementById("root");
 
 const state = {

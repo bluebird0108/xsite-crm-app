@@ -1,0 +1,17 @@
+[Unit]
+Description=XSITE CRM API (self-hosted backend)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/crm/server
+ExecStart=/usr/bin/node index.js
+Restart=on-failure
+RestartSec=3
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
