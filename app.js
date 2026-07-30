@@ -334,7 +334,7 @@ function renderLogin(msg) {
         <p class="login-msg" style="margin-top:14px">
           ${state.authMode === "signup"
             ? `Already registered? <a id="switchmode" style="cursor:pointer">Sign in</a>`
-            : `New team member? <a id="switchmode" style="cursor:pointer">Create your account</a> · <a id="send" style="cursor:pointer">Email me a sign-in link</a><br><a id="forgot" style="cursor:pointer">Forgot your password?</a>`}
+            : `New team member? <a id="switchmode" style="cursor:pointer">Create your account</a>`}
         </p>
         <p class="login-msg ${msg ? msg.kind : ""}" id="msg">${msg ? esc(msg.text) : ""}</p>
         <p class="login-security-note">Authorized Xsite personnel only · Dubai, UAE</p>
