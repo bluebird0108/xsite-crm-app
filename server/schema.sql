@@ -260,6 +260,22 @@ create table if not exists contract_files (
 create index if not exists cfiles_contract_idx on contract_files(contract_id);
 create index if not exists cfiles_submission_idx on contract_files(submission_id);
 
+-- ── KYC (Know Your Customer) — individual AML form, linked to a contact ──
+-- All form sections (identity, proof of id, address, contact, source of funds,
+-- employment, PEP attestation, attachments, declaration) live in `data` jsonb;
+-- only the linkage/status columns are promoted for querying.
+create table if not exists kyc_forms (
+  id          uuid primary key default gen_random_uuid(),
+  contact_id  uuid references contacts(id) on delete set null,
+  branch_ref  text,
+  status      text not null default 'draft',
+  data        jsonb not null default '{}'::jsonb,
+  created_by  uuid references users(id) on delete set null,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists kyc_contact_idx on kyc_forms(contact_id);
+
 -- ── document number sequences (server-assigned) ─────────────────────────
 create sequence if not exists contract_no_seq;
 create sequence if not exists invoice_no_seq;

@@ -19,7 +19,7 @@ const state = {
   screen: "dashboard",
   authMode: "signin",
   agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [], requests: [], contracts: [], accountTasks: [],
-  contacts: [], cashMovements: [], contractFiles: [], submissions: [],
+  contacts: [], cashMovements: [], contractFiles: [], submissions: [], kyc: [],
   selectedAgent: null,
   txQuery: "", txType: "All", ledgerQuery: "", ledgerTeam: "All", accTab: "master",
   txMonth: null, ledgerMonth: null, ceMonth: null, ceQuery: "", ceForm: null,
@@ -98,6 +98,7 @@ const COLUMNS = {
   contracts: "id,contract_no,deal_group,status,contract_date,start_date,end_date,landlord_name,tenant_name,owner_phone,tenant_phone,annual_rent,security_deposit,payment_mode,additional_terms,details,addendum,ejari_status,created_by,finalized_by,finalized_at,created_at,updated_at",
   account_tasks: "id,contract_id,task_type,status,money_doc_id,completed_by,completed_at,created_at",
   contacts: "id,name,contact_type,phone,email,notes,last_contact,birthday,created_by,created_at,updated_at",
+  kyc_forms: "id,contact_id,branch_ref,status,data,created_by,created_at,updated_at",
   contract_files: "id,contract_id,submission_id,doc_type,file_name,storage_path,size_bytes,uploaded_by_name,created_at",
   deal_submissions: "id,status,submitted_by_name,agent_name,owner_name,owner_phone,owner_email,owner_emirates_id,tenant_name,tenant_phone,tenant_email,tenant_emirates_id,building,unit,area,moving_date,cheque_count,price,dewa_number,notes,contract_id,reviewed_by_name,created_at",
   cash_movements: "id,movement_date,direction,channel,bank_account,agent_name,client,property,amount,reference,month,created_by,created_at",
@@ -151,9 +152,10 @@ async function loadData() {
     state.team = []; state.docs = []; state.staff = []; state.requests = [];
     state.contracts = []; state.accountTasks = [];
     state.contacts = []; state.cashMovements = []; state.contractFiles = []; state.submissions = [];
+    state.kyc = [];
     return;
   }
-  const [ag, dl, cm, ch, tm, md, sf, rq, ct, at, co, mv, cf, sb] = await Promise.all([
+  const [ag, dl, cm, ch, tm, md, sf, rq, ct, at, co, mv, cf, sb, ky] = await Promise.all([
     fetchAll("agents", "name"),
     fetchAll("deals", "sno"),
     fetchAll("commission_entries", "agent_name"),
@@ -168,6 +170,7 @@ async function loadData() {
     roleIn("owner", "accounts", "admin") ? fetchAllSafe("cash_movements", "movement_date", false) : Promise.resolve({ data: [] }),
     fetchAllSafe("contract_files", "created_at", false),
     fetchAllSafe("deal_submissions", "created_at", false),
+    roleIn("owner", "accounts", "admin") ? fetchAllSafe("kyc_forms", "created_at", false) : Promise.resolve({ data: [] }),
   ]);
   state.agents = requireData(ag, "Could not load agents");
   state.deals = requireData(dl, "Could not load deals");
@@ -183,6 +186,7 @@ async function loadData() {
   state.cashMovements = requireData(mv, "Could not load cash and bank movements");
   state.contractFiles = requireData(cf, "Could not load documents");
   state.submissions = requireData(sb, "Could not load deal submissions");
+  state.kyc = requireData(ky, "Could not load KYC forms");
   const cbmonths = availableMonths(state.cashMovements, "month");
   if (!state.cbMonth || !cbmonths.includes(state.cbMonth)) state.cbMonth = cbmonths[0] || null;
   const cemonths = availableMonths(state.commission, "month");
@@ -226,6 +230,10 @@ async function reloadRequests() {
 async function reloadContacts() {
   const result = await fetchAllSafe("contacts", "name", true, true);
   state.contacts = requireData(result, "Could not reload contacts");
+}
+async function reloadKyc() {
+  const result = await fetchAllSafe("kyc_forms", "created_at", false);
+  state.kyc = requireData(result, "Could not reload KYC forms");
 }
 
 async function reloadCashMovements() {
@@ -456,7 +464,7 @@ function renderApp() {
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else if (roleIn("agent")) body = viewLedgers();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewReceiptPrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail() + viewCeModal() + viewStaffModal() + viewEjariHelp() + viewLedgerStatement();
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewReceiptPrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail() + viewCeModal() + viewStaffModal() + viewEjariHelp() + viewLedgerStatement() + viewKycModal();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
@@ -2346,13 +2354,14 @@ function viewContacts() {
   const rows = state.contacts.filter((c) =>
     (state.contactType === "All" || c.contact_type === state.contactType) &&
     (!q || [c.name, c.contact_type, c.phone, c.email, c.notes].join(" ").toLowerCase().includes(q)));
-  const body = rows.map((c) => `<tr>
+  const kycFor = (id) => state.kyc.find((k) => k.contact_id === id);
+  const body = rows.map((c) => { const k = kycFor(c.id); return `<tr>
     <td><strong>${esc(c.name)}</strong></td>
     <td><span class="tag tag-neutral">${esc(c.contact_type)}</span></td>
     <td>${esc(c.phone || "—")}</td><td>${esc(c.email || "—")}</td>
-    <td>${c.last_contact ? esc(showDate(c.last_contact)) : "—"}</td>
+    <td>${k ? `<span class="tag ${k.status === "complete" ? "tag-accent" : "tag-neutral"}">KYC ${k.status === "complete" ? "complete" : "draft"}</span>` : `<span class="text-muted" style="font-size:11px">—</span>`}</td>
     <td class="tp-cell">${esc(c.notes || "—")}</td>
-    ${canManage ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editcontact="${c.id}">Edit</button><button class="btn btn-secondary btn-mini" data-deletecontact="${c.id}">Delete</button></div></td>` : ""}</tr>`).join("");
+    ${canManage ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-kyc="${c.id}">KYC</button><button class="btn btn-secondary btn-mini" data-editcontact="${c.id}">Edit</button><button class="btn btn-secondary btn-mini" data-deletecontact="${c.id}">Delete</button></div></td>` : ""}</tr>`; }).join("");
   return `<div>
     <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div><span class="card-kicker">CRM / Contacts</span><h1 style="margin-top:4px">Contacts</h1><p class="text-muted" style="margin:0">Buyers, sellers, tenants, and landlords — auto-synced from contracts.</p></div>
@@ -2365,7 +2374,7 @@ function viewContacts() {
     </div>
     <div class="sheet"><div class="sheet-hint">${state.contacts.length} contact records</div>
       <div class="table-wrap"><table class="grid" style="min-width:900px">
-        <thead><tr><th>Name</th><th>Type</th><th>Phone</th><th>Email</th><th>Last contact</th><th>Notes</th>${canManage ? "<th></th>" : ""}</tr></thead>
+        <thead><tr><th>Name</th><th>Type</th><th>Phone</th><th>Email</th><th>KYC</th><th>Notes</th>${canManage ? "<th></th>" : ""}</tr></thead>
         <tbody>${body || `<tr><td colspan="${canManage ? 7 : 6}"><div class="md-empty" style="border:0">No contacts match.</div></td></tr>`}</tbody>
       </table></div>
     </div>
@@ -2440,6 +2449,214 @@ async function syncContractContacts(contract) {
     catch { /* non-fatal */ }
   }
   try { await reloadContacts(); } catch { /* non-fatal */ }
+}
+
+// ── KYC (Know Your Customer) — individual AML form ───────
+// Linked to a contact; auto-fills whatever the client's contracts already hold
+// (name, Emirates ID, email, phone, address) so Compliance only keys the rest.
+const KYC_GENDERS = ["Male", "Female"];
+const KYC_MARITAL = ["Single", "Married", "Divorced", "Widowed"];
+const KYC_EMPLOYMENT = ["Salaried", "Self-Employed", "Retiree", "Unemployed"];
+const KYC_PEP = [
+  ["q1", "Have you ever been a Head of State or Government, a senior politician, senior government/judicial/military/law-enforcement official, a member of a central bank board or similar regulator, or an ambassador — local or foreign?"],
+  ["q2", "Have you ever been a senior official of a major political party, or a senior executive of a local or foreign government-owned commercial enterprise?"],
+  ["q3", "Are you an immediate family member (spouse, parent, sibling, child) or a close personal/professional associate of anyone in the above categories?"],
+  ["q4", "Have you ever been entrusted with a prominent function by an international organisation, local or foreign?"],
+];
+const KYC_ATTACH = [
+  ["passportCopy", "Passport copy"], ["emiratesId", "Emirates ID"], ["visaPage", "Visa page"],
+  ["assetProof", "Asset proof"], ["drivingLicense", "Driving license"], ["others", "Others"],
+];
+function splitName(full) {
+  const parts = String(full || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return { first: "", middle: "", last: "" };
+  if (parts.length === 1) return { first: parts[0], middle: "", last: "" };
+  return { first: parts[0], last: parts[parts.length - 1], middle: parts.slice(1, -1).join(" ") };
+}
+function emptyKycData() {
+  return {
+    identity: { firstName: "", middleName: "", lastName: "", dob: "", gender: "", maritalStatus: "", nationality: "", dualNationality: false, dualDetail: "" },
+    proofId: { emiratesId: "", emiratesIdExpiry: "", passportNo: "", passportExpiry: "", visaFileNo: "", visaExpiry: "" },
+    address: { presentLine1: "", presentLine2: "", permanentSame: false, permanentLine1: "", permanentLine2: "" },
+    contact: { mobile: "", home: "", work: "", email: "" },
+    sourceOfFunds: { bankMortgage: false, savings: false, saleOfProperty: false, internationalTransfer: false, sharesBonds: false, others: false, description: "" },
+    employment: { status: "", occupation: "", jobTitle: "", industry: "", lengthOfService: "" },
+    attestation: { q1: false, q1d: "", q2: false, q2d: "", q3: false, q3d: "", q4: false, q4d: "" },
+    attachments: { passportCopy: false, emiratesId: false, visaPage: false, assetProof: false, drivingLicense: false, others: false },
+    declaration: { fullNameSigned: "", signedDate: "" },
+  };
+}
+// Deep-merge a stored data blob over the empty skeleton so older/partial records
+// still render every field.
+function kycDataFromRow(row) {
+  const base = emptyKycData();
+  const d = (row && row.data) || {};
+  for (const k of Object.keys(base)) Object.assign(base[k], d[k] || {});
+  return base;
+}
+// Pull anything the contact's contracts already know. Landlord/seller contacts
+// map to the contract's lessor fields; tenant/buyer contacts to the tenant fields.
+function kycAutofill(contact, data) {
+  if (!contact) return { filled: 0, contractNo: null };
+  const name = (contact.name || "").trim().toLowerCase();
+  const asLandlord = ["Landlord", "Seller"].includes(contact.contact_type);
+  const match = state.contracts.find((c) =>
+    (asLandlord ? (c.landlord_name || "") : (c.tenant_name || "")).trim().toLowerCase() === name && name)
+    || state.contracts.find((c) => [c.landlord_name, c.tenant_name].map((n) => (n || "").trim().toLowerCase()).includes(name) && name);
+  if (!match) return { filled: 0, contractNo: null };
+  const det = match.details || {};
+  const isLandlord = (match.landlord_name || "").trim().toLowerCase() === name;
+  const nm = splitName(isLandlord ? match.landlord_name : match.tenant_name);
+  const addr = [det.propertyNo || det.buildingName, det.location || det.premisesNo];
+  let filled = 0;
+  const set = (obj, key, val) => { if (val && !obj[key]) { obj[key] = val; filled++; } };
+  set(data.identity, "firstName", nm.first); set(data.identity, "middleName", nm.middle); set(data.identity, "lastName", nm.last);
+  set(data.proofId, "emiratesId", isLandlord ? det.lessorEmiratesId : det.tenantEmiratesId);
+  set(data.contact, "email", isLandlord ? det.lessorEmail : det.tenantEmail);
+  set(data.contact, "mobile", isLandlord ? match.owner_phone : match.tenant_phone);
+  set(data.address, "presentLine1", [det.propertyNo, det.buildingName].filter(Boolean).join(", "));
+  set(data.address, "presentLine2", [det.location, det.premisesNo].filter(Boolean).join(", "));
+  return { filled, contractNo: match.contract_no };
+}
+function openKyc(contactId, autofill = true) {
+  const contact = state.contacts.find((c) => c.id === contactId);
+  if (!contact) return;
+  const existing = state.kyc.find((k) => k.contact_id === contactId);
+  const data = existing ? kycDataFromRow(existing) : emptyKycData();
+  let autofillNote = "";
+  if (!existing) {
+    // Seed contact-level basics first, then enrich from contracts.
+    const nm = splitName(contact.name);
+    if (!data.identity.firstName) { data.identity.firstName = nm.first; data.identity.middleName = nm.middle; data.identity.lastName = nm.last; }
+    if (!data.contact.email) data.contact.email = contact.email || "";
+    if (!data.contact.mobile) data.contact.mobile = contact.phone || "";
+  }
+  if (autofill) { const r = kycAutofill(contact, data); if (r.contractNo) autofillNote = `Auto-filled ${r.filled} field${r.filled === 1 ? "" : "s"} from contract ${r.contractNo}.`; }
+  state.kycForm = {
+    id: existing ? existing.id : null, contact_id: contactId, contactName: contact.name,
+    branch_ref: existing ? (existing.branch_ref || "") : "", status: existing ? existing.status : "draft",
+    data, msg: autofillNote,
+  };
+  render();
+}
+function kf(id, label, value, type = "text", attrs = "") {
+  return `<div class="field"><label for="${id}">${esc(label)}</label><input class="input" id="${id}" type="${type}" value="${esc(value || "")}" ${attrs}></div>`;
+}
+function kcheck(id, label, checked) {
+  return `<label class="clause-check"><input type="checkbox" id="${id}" ${checked ? "checked" : ""}> ${esc(label)}</label>`;
+}
+function kradio(name, value, current) {
+  return `<label class="clause-check"><input type="radio" name="${name}" value="${esc(value)}" ${value === current ? "checked" : ""}> ${esc(value)}</label>`;
+}
+function viewKycModal() {
+  const f = state.kycForm;
+  if (!f) return "";
+  const d = f.data;
+  return `<div class="modal-backdrop"><div class="modal contract-modal" role="dialog" aria-modal="true" aria-labelledby="kyctitle">
+    <div class="modal-head"><h3 id="kyctitle">KYC — ${esc(f.contactName)}</h3><button class="modal-close" id="kycclose" aria-label="Close">×</button></div>
+    <div class="modal-body">
+      <div class="contract-form-section"><div class="form-grid" style="grid-template-columns:1fr 1fr">
+        ${kf("ky_branch_ref", "Branch ref. no.", f.branch_ref)}
+        <div class="field"><label for="ky_status">Status</label><select class="input" id="ky_status"><option value="draft" ${f.status === "draft" ? "selected" : ""}>Draft</option><option value="complete" ${f.status === "complete" ? "selected" : ""}>Complete</option></select></div>
+      </div></div>
+
+      <div class="contract-form-section"><h4>1 · Identity information</h4><div class="form-grid">
+        ${kf("ky_first", "First name", d.identity.firstName)}${kf("ky_middle", "Middle name", d.identity.middleName)}${kf("ky_last", "Last name", d.identity.lastName)}
+        ${kf("ky_dob", "Date of birth", d.identity.dob, "date")}
+        <div class="field"><label for="ky_gender">Gender</label><div class="clause-grid">${KYC_GENDERS.map((g) => kradio("ky_gender", g, d.identity.gender)).join("")}</div></div>
+        <div class="field"><label for="ky_marital">Marital status</label><select class="input" id="ky_marital"><option value=""></option>${KYC_MARITAL.map((m) => `<option ${m === d.identity.maritalStatus ? "selected" : ""}>${m}</option>`).join("")}</select></div>
+        ${kf("ky_nat", "Nationality", d.identity.nationality)}
+        <div class="field"><label>Dual nationality</label><div class="clause-grid">${kcheck("ky_dual", "Yes", d.identity.dualNationality)}</div></div>
+        ${kf("ky_dual_detail", "If yes, specify", d.identity.dualDetail)}
+      </div></div>
+
+      <div class="contract-form-section"><h4>2 · Proof of identity</h4><div class="form-grid">
+        ${kf("ky_eid", "Emirates ID", d.proofId.emiratesId)}${kf("ky_eid_exp", "Emirates ID expiry", d.proofId.emiratesIdExpiry, "date")}
+        ${kf("ky_pp", "Passport no.", d.proofId.passportNo)}${kf("ky_pp_exp", "Passport expiry", d.proofId.passportExpiry, "date")}
+        ${kf("ky_visa", "Visa file no.", d.proofId.visaFileNo)}${kf("ky_visa_exp", "Visa expiry", d.proofId.visaExpiry, "date")}
+      </div></div>
+
+      <div class="contract-form-section"><h4>3 · Address information</h4><div class="form-grid">
+        ${kf("ky_addr1", "Present — address line 1", d.address.presentLine1)}${kf("ky_addr2", "Present — address line 2", d.address.presentLine2)}
+        <div class="field" style="grid-column:1/-1"><div class="clause-grid">${kcheck("ky_perm_same", "Permanent address same as present", d.address.permanentSame)}</div></div>
+        ${kf("ky_perm1", "Permanent — address line 1", d.address.permanentLine1)}${kf("ky_perm2", "Permanent — address line 2", d.address.permanentLine2)}
+      </div></div>
+
+      <div class="contract-form-section"><h4>4 · Contact information</h4><div class="form-grid">
+        ${kf("ky_mobile", "Mobile no.", d.contact.mobile, "tel")}${kf("ky_home", "Home", d.contact.home, "tel")}${kf("ky_work", "Work", d.contact.work, "tel")}${kf("ky_email", "Email", d.contact.email, "email")}
+      </div></div>
+
+      <div class="contract-form-section"><h4>5 · Expected source of funds</h4>
+        <div class="clause-grid">
+          ${kcheck("ky_sf_mortgage", "Bank mortgage", d.sourceOfFunds.bankMortgage)}${kcheck("ky_sf_savings", "Savings", d.sourceOfFunds.savings)}${kcheck("ky_sf_sale", "Sale of other property", d.sourceOfFunds.saleOfProperty)}
+          ${kcheck("ky_sf_intl", "International transfer", d.sourceOfFunds.internationalTransfer)}${kcheck("ky_sf_shares", "Shares or bonds", d.sourceOfFunds.sharesBonds)}${kcheck("ky_sf_others", "Others", d.sourceOfFunds.others)}
+        </div>
+        <div class="field" style="margin-top:10px"><label for="ky_sf_desc">Description</label><input class="input" id="ky_sf_desc" value="${esc(d.sourceOfFunds.description)}"></div>
+      </div>
+
+      <div class="contract-form-section"><h4>6 · Employment information</h4>
+        <div class="clause-grid">${KYC_EMPLOYMENT.map((e) => kradio("ky_emp", e, d.employment.status)).join("")}</div>
+        <div class="form-grid" style="margin-top:10px">
+          ${kf("ky_occupation", "Occupation", d.employment.occupation)}${kf("ky_jobtitle", "Job title", d.employment.jobTitle)}${kf("ky_industry", "Industry", d.employment.industry)}${kf("ky_service", "Length of service (years)", d.employment.lengthOfService, "number", 'min="0" step="1"')}
+        </div>
+      </div>
+
+      <div class="contract-form-section"><h4>7 · Attestation (PEP screening)</h4>
+        ${KYC_PEP.map(([key, text]) => `
+          <div class="kyc-pep">
+            <div class="kyc-pep-q"><span>${esc(text)}</span><label class="clause-check kyc-pep-yes"><input type="checkbox" id="ky_${key}" ${d.attestation[key] ? "checked" : ""}> Yes</label></div>
+            <input class="input" id="ky_${key}d" placeholder="If yes, details" value="${esc(d.attestation[key + "d"])}">
+          </div>`).join("")}
+      </div>
+
+      <div class="contract-form-section"><h4>8 · Attachments received</h4>
+        <div class="clause-grid">${KYC_ATTACH.map(([key, label]) => kcheck("ky_at_" + key, label, d.attachments[key])).join("")}</div>
+      </div>
+
+      <div class="contract-form-section"><h4>Declaration</h4>
+        <p class="text-muted" style="font-size:12px;margin:0 0 10px">I declare that the information provided in this form, and in any attached documents, is true and complete to the best of my knowledge.</p>
+        <div class="form-grid" style="grid-template-columns:2fr 1fr">
+          ${kf("ky_signed_name", "Full name (as on passport)", d.declaration.fullNameSigned)}${kf("ky_signed_date", "Date", d.declaration.signedDate, "date")}
+        </div>
+      </div>
+
+      <div class="modal-actions"><span class="form-msg" id="kycmsg" aria-live="polite">${esc(f.msg || "")}</span>
+        <button class="btn btn-secondary" id="kycrefill">Re-fill from contract</button>
+        <button class="btn btn-secondary" id="kyccancel">Cancel</button>
+        <button class="btn btn-primary" id="kycsave">Save KYC</button></div>
+    </div></div></div>`;
+}
+// Read the whole KYC form out of the DOM into a data blob.
+function readKycData() {
+  const v = (id) => (document.getElementById(id)?.value || "").trim();
+  const ck = (id) => !!document.getElementById(id)?.checked;
+  const rad = (name) => { const el = document.querySelector(`input[name="${name}"]:checked`); return el ? el.value : ""; };
+  return {
+    identity: { firstName: v("ky_first"), middleName: v("ky_middle"), lastName: v("ky_last"), dob: v("ky_dob"), gender: rad("ky_gender"), maritalStatus: v("ky_marital"), nationality: v("ky_nat"), dualNationality: ck("ky_dual"), dualDetail: v("ky_dual_detail") },
+    proofId: { emiratesId: v("ky_eid"), emiratesIdExpiry: v("ky_eid_exp"), passportNo: v("ky_pp"), passportExpiry: v("ky_pp_exp"), visaFileNo: v("ky_visa"), visaExpiry: v("ky_visa_exp") },
+    address: { presentLine1: v("ky_addr1"), presentLine2: v("ky_addr2"), permanentSame: ck("ky_perm_same"), permanentLine1: v("ky_perm1"), permanentLine2: v("ky_perm2") },
+    contact: { mobile: v("ky_mobile"), home: v("ky_home"), work: v("ky_work"), email: v("ky_email") },
+    sourceOfFunds: { bankMortgage: ck("ky_sf_mortgage"), savings: ck("ky_sf_savings"), saleOfProperty: ck("ky_sf_sale"), internationalTransfer: ck("ky_sf_intl"), sharesBonds: ck("ky_sf_shares"), others: ck("ky_sf_others"), description: v("ky_sf_desc") },
+    employment: { status: rad("ky_emp"), occupation: v("ky_occupation"), jobTitle: v("ky_jobtitle"), industry: v("ky_industry"), lengthOfService: v("ky_service") },
+    attestation: { q1: ck("ky_q1"), q1d: v("ky_q1d"), q2: ck("ky_q2"), q2d: v("ky_q2d"), q3: ck("ky_q3"), q3d: v("ky_q3d"), q4: ck("ky_q4"), q4d: v("ky_q4d") },
+    attachments: { passportCopy: ck("ky_at_passportCopy"), emiratesId: ck("ky_at_emiratesId"), visaPage: ck("ky_at_visaPage"), assetProof: ck("ky_at_assetProof"), drivingLicense: ck("ky_at_drivingLicense"), others: ck("ky_at_others") },
+    declaration: { fullNameSigned: v("ky_signed_name"), signedDate: v("ky_signed_date") },
+  };
+}
+async function saveKyc() {
+  const f = state.kycForm;
+  const msg = document.getElementById("kycmsg");
+  const v = (id) => (document.getElementById(id)?.value || "").trim();
+  const data = readKycData();
+  if (!data.identity.firstName && !data.identity.lastName) { msg.textContent = "Enter at least a first or last name."; return; }
+  const btn = document.getElementById("kycsave"); btn.disabled = true; btn.textContent = "Saving…";
+  const row = { contact_id: f.contact_id, branch_ref: v("ky_branch_ref") || null, status: v("ky_status") || "draft", data, updated_at: new Date().toISOString() };
+  const res = f.id
+    ? await supabase.from("kyc_forms").update(row).eq("id", f.id)
+    : await supabase.from("kyc_forms").insert(row);
+  if (res.error) { msg.textContent = res.error.message; btn.disabled = false; btn.textContent = "Save KYC"; return; }
+  if (!await reloadAfterWrite(reloadKyc, "KYC form")) return;
+  state.kycForm = null; render();
 }
 
 // ── view: cash & bank movements (owner + accounts) ───────
@@ -3426,6 +3643,7 @@ function wireScreen() {
     if (c) { state.contactForm = contactFormFromRow(c); render(); }
   });
   root.querySelectorAll("[data-deletecontact]").forEach((b) => b.onclick = () => deleteContact(b.dataset.deletecontact));
+  root.querySelectorAll("[data-kyc]").forEach((b) => b.onclick = () => openKyc(b.dataset.kyc));
   const contactq = document.getElementById("contactq");
   if (contactq) contactq.oninput = () => {
     state.contactQuery = contactq.value;
@@ -3548,6 +3766,18 @@ function wireModals() {
   const contactClose2 = document.getElementById("contactclose2"); if (contactClose2) contactClose2.onclick = () => { state.contactForm = null; render(); };
   const contactCancel2 = document.getElementById("contactcancel2"); if (contactCancel2) contactCancel2.onclick = () => { state.contactForm = null; render(); };
   const contactSave2 = document.getElementById("contactsave2"); if (contactSave2) contactSave2.onclick = saveContactForm;
+  // KYC modal
+  const kycClose = document.getElementById("kycclose"); if (kycClose) kycClose.onclick = () => { state.kycForm = null; render(); };
+  const kycCancel = document.getElementById("kyccancel"); if (kycCancel) kycCancel.onclick = () => { state.kycForm = null; render(); };
+  const kycSave = document.getElementById("kycsave"); if (kycSave) kycSave.onclick = saveKyc;
+  const kycRefill = document.getElementById("kycrefill"); if (kycRefill) kycRefill.onclick = () => {
+    const c = state.contacts.find((x) => x.id === state.kycForm?.contact_id);
+    if (!c) return;
+    state.kycForm.data = readKycData();   // keep the user's in-progress edits
+    const r = kycAutofill(c, state.kycForm.data);
+    state.kycForm.msg = r.contractNo ? `Re-filled ${r.filled} empty field${r.filled === 1 ? "" : "s"} from contract ${r.contractNo}.` : "No linked contract found for this contact.";
+    render();
+  };
   // cash movement modal
   const cmClose = document.getElementById("cmclose"); if (cmClose) cmClose.onclick = () => { state.cashMoveForm = null; render(); };
   const cmCancel = document.getElementById("cmcancel"); if (cmCancel) cmCancel.onclick = () => { state.cashMoveForm = null; render(); };
