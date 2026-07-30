@@ -304,8 +304,11 @@ function renderLogin(msg) {
   <div class="login-shell">
     <div class="login-panel">
       <div class="login-brand">
-        <img class="login-logo" src="./xsite-logo.png" alt="Xsite Real Estate Brokers">
-        <p class="login-brand-note">Real Estate Operations</p>
+        <div class="login-brand-top">
+          <img class="login-logo" src="./xsite-logo.png" alt="Xsite Real Estate Brokers">
+          <p class="login-tagline">Honest. Reliable. <em>Professional.</em></p>
+        </div>
+        <p class="login-brand-foot">RERA Licensed · Dubai, UAE</p>
       </div>
       <div class="login-access">
         <span class="login-kicker">Private business system</span>
