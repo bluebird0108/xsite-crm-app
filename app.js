@@ -1067,16 +1067,29 @@ function viewDashboard() {
   const deals = state.deals.filter((deal) => !state.txMonth || deal.month === state.txMonth);
   const received = deals.reduce((s, d) => s + (+d.commission_received || 0), 0);
   const totc = deals.reduce((s, d) => s + (+d.total_commission || 0), 0);
+  const collectRate = totc > 0 ? Math.round((received / totc) * 100) : 0;
+  const outstanding = Math.max(0, totc - received);
+  const avgPerDeal = deals.length ? Math.round(totc / deals.length) : 0;
   const tiers = expiryTiers();
   const expiringSoon = tiers.slice(1).reduce((s, t) => s + t.items.length, 0);
   const kicker = p.role === "owner" ? "Owner / Overview" : p.role === "accounts" ? "Accounts workspace" : "Admin workspace";
   const kpis = `
   <section class="md-kpi-grid">
     <div class="md-kpi is-accent"><span class="card-kicker">Deals this month</span><span class="md-kpi-value">${deals.length}</span><span class="md-kpi-detail">${monthLabel(state.txMonth)} register</span></div>
-    <div class="md-kpi"><span class="card-kicker">Commission received</span><span class="md-kpi-value">${money(Math.round(received))}</span><span class="md-kpi-detail">Sum of received commission</span></div>
-    <div class="md-kpi"><span class="card-kicker">Total commission</span><span class="md-kpi-value">${money(Math.round(totc))}</span><span class="md-kpi-detail">Incl. third-party share</span></div>
+    <div class="md-kpi"><span class="card-kicker">Commission received</span><span class="md-kpi-value">${money(Math.round(received))}</span><span class="md-kpi-detail">Collected to date</span></div>
+    <div class="md-kpi"><span class="card-kicker">Avg. per deal</span><span class="md-kpi-value">${money(avgPerDeal)}</span><span class="md-kpi-detail">Total commission ÷ deals</span></div>
     <div class="md-kpi"><span class="card-kicker">Expiring ≤90 days</span><span class="md-kpi-value">${expiringSoon}</span><span class="md-kpi-detail">${tiers[0].items.length} already expired</span></div>
   </section>`;
+  const collectPanel = roleIn("owner", "accounts", "admin") ? `
+    <div class="md-collect" role="group" aria-label="Commission collection rate">
+      <div class="md-collect-top"><span class="card-kicker">Collection rate</span><span class="md-collect-pct">${collectRate}%</span></div>
+      <div class="md-meter"><div class="md-meter-fill" style="width:${collectRate}%"></div></div>
+      <div class="md-collect-legend">
+        <div><span class="lg-label">Received</span><strong>${money(Math.round(received))}</strong></div>
+        <div><span class="lg-label">Total booked</span><strong>${money(Math.round(totc))}</strong></div>
+        <div class="lg-out"><span class="lg-label">Outstanding</span><strong>${money(Math.round(outstanding))}</strong></div>
+      </div>
+    </div>` : "";
   const cashDates = availableDates(state.cash, "as_at");
   const cashRows = state.cash.filter((c) => c.as_at === state.cashDate);
   const isLatestCash = state.cashDate === cashDates[0];
@@ -1093,11 +1106,21 @@ function viewDashboard() {
       ${!isLatestCash ? `<p class="text-muted" style="font-size:11px;margin:0 0 8px">Historical snapshot — latest is ${showDate(cashDates[0])}.</p>` : ""}
       ${cashRows.map((c) => `<div class="cash-row ${/remaining/i.test(c.label) ? "is-remaining" : /total/i.test(c.label) ? "is-total" : ""}"><span>${esc(c.label)}</span><strong>${money(c.amount)}</strong></div>`).join("")}
     </section>` : "";
+  const sevClass = ["crit", "warn", "watch", "watch"];
   const expiryCard = `
     <section class="md-section">
       <div class="md-section-header"><h3>Contract expiries</h3>${roleIn("owner","accounts") ? `<button class="btn btn-secondary" data-screen="transactions">Open register</button>` : ""}</div>
-      <div class="md-attention-list">
-        ${tiers.map((t) => `<div class="md-attention-item"><span><strong>${t.title}</strong><br><span class="text-muted" style="font-size:11px">${t.hint}</span></span><span class="md-attention-count">${t.items.length}</span></div>`).join("")}
+      <div class="md-ladder">
+        ${tiers.map((t, i) => {
+          const eg = t.items.slice(0, 2).map((x) => esc([x.unit, x.building].filter(Boolean).join(" "))).join(" · ");
+          const extra = t.items.length > 2 ? ` · +${t.items.length - 2}` : "";
+          return `<div class="md-rung ${sevClass[i]}">
+            <span class="stripe" aria-hidden="true"></span>
+            <span class="md-rung-label"><strong>${esc(t.title)}</strong><span>${esc(t.hint)}</span></span>
+            <span class="md-rung-eg">${eg || "—"}${extra}</span>
+            <span class="md-rung-count">${t.items.length}</span>
+          </div>`;
+        }).join("")}
       </div>
     </section>`;
   const strip = cashCard ? `<div class="fin-strip">${cashCard}${expiryCard}</div>` : expiryCard;
@@ -1153,13 +1176,14 @@ function viewDashboard() {
 
   return `
   <div class="md-dashboard">
-    <header class="md-dashboard-header">
+    <header class="md-dashboard-header has-collect">
       <div><span class="card-kicker">${esc(kicker)}</span><h1 style="margin-top:4px">${monthLabel(state.txMonth)} Overview</h1><p class="text-muted" style="margin:0">Live from the Xsite database.</p></div>
+      ${collectPanel}
     </header>
-    ${searchBox}
-    ${dailySection}
     ${kpis}
     ${strip}
+    ${searchBox}
+    ${dailySection}
     ${alertStrip}
   </div>`;
 }
@@ -1169,10 +1193,20 @@ function viewAgentDashboard() {
   const received = rows.reduce((s, r) => s + (+r.received || 0), 0);
   const vat = rows.reduce((s, r) => s + (+r.vat || 0), 0);
   const share = rows.reduce((s, r) => s + (+r.agent_share || 0), 0);
+  const shareRate = received > 0 ? Math.round((share / received) * 100) : 0;
   return `
   <div class="md-dashboard">
-    <header class="md-dashboard-header">
+    <header class="md-dashboard-header has-collect">
       <div><span class="card-kicker">Private agent account</span><h1 style="margin-top:4px">${esc(state.profile.full_name || state.profile.agent_name || "My account")}</h1><p class="text-muted" style="margin:0">Your ${monthLabel(state.ledgerMonth)} commission summary.</p></div>
+      <div class="md-collect" role="group" aria-label="My share of commission received">
+        <div class="md-collect-top"><span class="card-kicker">My share of received</span><span class="md-collect-pct">${shareRate}%</span></div>
+        <div class="md-meter"><div class="md-meter-fill" style="width:${shareRate}%"></div></div>
+        <div class="md-collect-legend">
+          <div><span class="lg-label">Received</span><strong>${money(Math.round(received))}</strong></div>
+          <div><span class="lg-label">VAT @ 5%</span><strong>${money(Math.round(vat))}</strong></div>
+          <div class="lg-out"><span class="lg-label">My share</span><strong>${money(Math.round(share))}</strong></div>
+        </div>
+      </div>
     </header>
     <section class="md-kpi-grid">
       <div class="md-kpi is-accent"><span class="card-kicker">My deals</span><span class="md-kpi-value">${rows.length}</span><span class="md-kpi-detail">Commission entries</span></div>
