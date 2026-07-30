@@ -2121,22 +2121,33 @@ async function saveReceiptDraft() {
 const normName = (s) => String(s || "").trim().replace(/\s+/g, " ").toUpperCase();
 const sameAgent = (a, b) => normName(a) === normName(b);
 function allLedgerNames() {
-  // Authoritative full names come from commission entries + the staff roster.
-  const auth = new Set();
-  state.commission.forEach((r) => { if (r.agent_name) auth.add(normName(r.agent_name)); });
-  state.staff.forEach((x) => { if (x.name) auth.add(normName(x.name)); });
-  const authArr = [...auth];
-  const names = new Set(auth);
-  // Legacy short agent-table names shadow the fuller staff name (e.g. "WAJAHAT ISRAR"
-  // vs "WAJAHAT ISRAR HAJI MUHAMMAD ISRAR"). Drop a short variant when a fuller name exists.
+  const runIn = (full, part) => (" " + full + " ").includes(" " + part + " ");
+  // Commission names are the canonical ledger identity: they carry the money and
+  // sameAgent() matches them exactly. The staff roster only adds people who have
+  // no deals yet (a zero ledger, ready to link to a login).
+  const comm = new Set();
+  state.commission.forEach((r) => { if (r.agent_name) comm.add(normName(r.agent_name)); });
+  const commArr = [...comm];
+  const names = new Set(comm);
+  // A staff member's formal record carries first + father's names ("SALMAN MUNIR"
+  // → "SALMAN MUNIR BAKHT MUNIR"). Skip a staff name when a commission name is the
+  // same person — whole-word run either way — so one person never gets two rows.
+  const authArr = [...comm];
+  state.staff.forEach((x) => {
+    if (!x.name) return;
+    const n = normName(x.name);
+    if (comm.has(n)) return;
+    if (commArr.some((c) => runIn(n, c) || runIn(c, n))) return;
+    names.add(n);
+    authArr.push(n);
+  });
+  // Legacy short agent-table names shadow a fuller name already present (e.g.
+  // "WAJAHAT ISRAR" ⊂ "WAJAHAT ISRAR HAJI MUHAMMAD ISRAR"). Drop the short variant.
   state.agents.forEach((a) => {
     if (!a.name) return;
     const n = normName(a.name);
-    if (auth.has(n)) return;
-    // Shadowed when the short name appears as a run of whole words anywhere in a
-    // fuller staff name — start ("WAJAHAT ISRAR" ⊂ "WAJAHAT ISRAR HAJI…") or
-    // middle ("FARAZ HASSAN KAZMI" ⊂ "SYED FARAZ HASSAN KAZMI…").
-    const shadowed = authArr.some((f) => (" " + f + " ").includes(" " + n + " "));
+    if (names.has(n)) return;
+    const shadowed = authArr.some((f) => runIn(f, n) || runIn(n, f));
     if (!shadowed) names.add(n);
   });
   return [...names].filter(Boolean).sort((a, b) => a.localeCompare(b));
