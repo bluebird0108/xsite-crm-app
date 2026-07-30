@@ -747,7 +747,7 @@ function contractDraftFromDeal(deal) {
     landlord_name: deal?.landlord || "", tenant_name: deal?.tenant || "", owner_phone: "", tenant_phone: "",
     annual_rent: deal?.price || "", security_deposit: deal?.security_deposit || 0,
     payment_mode: deal?.cheque_count ? `${deal.cheque_count} cheque(s)` : (deal?.payment_method || ""), additional_terms: "",
-    details: { lessorName: deal?.landlord || "", lessorEmiratesId: "", lessorEmail: "", lessorLicenseNo: "", lessorLicensingAuthority: "",
+    details: { agentName: [deal?.agent, deal?.agent2].filter((n) => n && n !== "N/A").join(" + "), lessorName: deal?.landlord || "", lessorEmiratesId: "", lessorEmail: "", lessorLicenseNo: "", lessorLicensingAuthority: "",
       tenantEmiratesId: "", tenantEmail: "", tenantLicenseNo: "", tenantLicensingAuthority: "", plotNo: "", makaniNo: "",
       buildingName: deal?.building || "", propertyNo: deal?.unit || "", propertyType: "Residential", contractValue: deal?.price || "", unitType: "", propertyArea: "", location: deal?.area || "", premisesNo: "" },
     addendum: { furnishing: "UNFURNISHED", premises: "", unitNo: deal?.unit || "", building: deal?.building || "", area: deal?.area || "", city: "DUBAI", customTerms: "" },
@@ -812,7 +812,7 @@ function viewContracts() {
       : canEjari
         ? `<button class="btn btn-mini ${ejariRegistered ? "btn-secondary" : "btn-primary"}" data-toggleejari="${contract.id}">${ejariRegistered ? "Registered" : "Register Ejari"}</button> <button class="btn btn-secondary btn-mini" data-ejariportal="${contract.id}" title="Open the Ejari portal with all values ready to copy">Portal</button>`
         : `<span class="tag ${ejariRegistered ? "tag-neutral" : "tag-accent"}">${ejariRegistered ? "Registered" : "Pending"}</span>`;
-    return `<tr><td><strong>${esc(contract.contract_no)}</strong></td><td>${esc(dealLabelFor(contract.deal_group))}</td>
+    return `<tr><td><strong>${esc(contract.contract_no)}</strong></td><td>${esc(dealLabelFor(contract.deal_group))}${contract.details?.agentName ? `<div class="text-muted" style="font-size:11px">Agent: ${esc(contract.details.agentName)}</div>` : ""}</td>
       <td>${esc(contract.landlord_name)} → ${esc(contract.tenant_name)}</td><td>${showDate(contract.start_date)} – ${showDate(contract.end_date)}</td>
       <td><span class="tag ${contract.status === "draft" ? "tag-accent" : "tag-neutral"}">${esc(contract.status)}</span></td>
       <td>${ejariCell}</td>
@@ -849,6 +849,7 @@ function viewContractModal() {
     <div class="modal-head"><h3 id="contracttitle">${f.id ? `Edit ${esc(f.contract_no)}` : "New tenancy contract draft"}</h3><button class="modal-close" id="contractclose" aria-label="Close">×</button></div>
     <div class="modal-body"><div class="contract-form-section"><h4>Deal and contract</h4><div class="form-grid">
       <div class="field"><label for="ct_deal">Related deal</label><select class="input" id="ct_deal">${options}</select></div>
+      ${contractInput("ct_agent","Requesting agent",d.agentName)}
       ${contractInput("ct_contract_date","Contract date",f.contract_date,"date")}${contractInput("ct_start","Start date",f.start_date,"date")}${contractInput("ct_end","End date",f.end_date,"date")}
       ${contractInput("ct_landlord","Landlord / owner",f.landlord_name)}${contractInput("ct_tenant","Tenant",f.tenant_name)}${contractInput("ct_owner_phone","Owner phone",f.owner_phone,"tel")}${contractInput("ct_tenant_phone","Tenant phone",f.tenant_phone,"tel")}
       ${contractInput("ct_rent","Annual rent (AED)",f.annual_rent,"number",'min="0" step="0.01"')}${contractInput("ct_contract_value","Total contract value (AED)",d.contractValue ?? f.annual_rent,"number",'min="0" step="0.01"')}${contractInput("ct_deposit","Security deposit (AED)",f.security_deposit,"number",'min="0" step="0.01"')}${contractInput("ct_payment","Payment mode",f.payment_mode)}
@@ -880,7 +881,7 @@ async function saveContract(status) {
     p_contract_date: value("ct_contract_date"), p_start_date: value("ct_start"), p_end_date: value("ct_end"),
     p_landlord_name: value("ct_landlord"), p_tenant_name: value("ct_tenant"), p_owner_phone: value("ct_owner_phone"), p_tenant_phone: value("ct_tenant_phone"),
     p_annual_rent: Number(value("ct_rent")), p_security_deposit: Number(value("ct_deposit")), p_payment_mode: value("ct_payment"), p_additional_terms: value("ct_terms"),
-    p_details: { lessorName:value("ct_landlord"), lessorEmiratesId:value("ct_lessor_id"), lessorEmail:value("ct_lessor_email"), lessorLicenseNo:value("ct_lessor_license"), lessorLicensingAuthority:value("ct_lessor_authority"), tenantEmiratesId:value("ct_tenant_id"), tenantEmail:value("ct_tenant_email"), tenantLicenseNo:value("ct_tenant_license"), tenantLicensingAuthority:value("ct_tenant_authority"), plotNo:value("ct_plot"), makaniNo:value("ct_makani"), buildingName:value("ct_building"), propertyNo:value("ct_unit"), propertyType:value("ct_property_type"), contractValue:value("ct_contract_value"), unitType:value("ct_unit_type"), propertyArea:value("ct_area_sqm"), location:value("ct_location"), premisesNo:value("ct_premises_no") },
+    p_details: { agentName:value("ct_agent"), lessorName:value("ct_landlord"), lessorEmiratesId:value("ct_lessor_id"), lessorEmail:value("ct_lessor_email"), lessorLicenseNo:value("ct_lessor_license"), lessorLicensingAuthority:value("ct_lessor_authority"), tenantEmiratesId:value("ct_tenant_id"), tenantEmail:value("ct_tenant_email"), tenantLicenseNo:value("ct_tenant_license"), tenantLicensingAuthority:value("ct_tenant_authority"), plotNo:value("ct_plot"), makaniNo:value("ct_makani"), buildingName:value("ct_building"), propertyNo:value("ct_unit"), propertyType:value("ct_property_type"), contractValue:value("ct_contract_value"), unitType:value("ct_unit_type"), propertyArea:value("ct_area_sqm"), location:value("ct_location"), premisesNo:value("ct_premises_no") },
     p_addendum: { furnishing:value("ct_furnishing"), premises:value("ct_add_premises"), unitNo:value("ct_add_unit"), building:value("ct_add_building"), area:value("ct_add_area"), city:value("ct_add_city"), customTerms:value("ct_add_terms"), removedClauses: ADDENDUM_CLAUSES.filter((c) => document.getElementById("ax_" + c.key) && !document.getElementById("ax_" + c.key).checked).map((c) => c.key) },
   };
   if (!payload.p_contract_date || !payload.p_start_date || !payload.p_end_date || !payload.p_landlord_name || !payload.p_tenant_name || !Number.isFinite(payload.p_annual_rent) || payload.p_annual_rent < 0 || !Number.isFinite(payload.p_security_deposit) || payload.p_security_deposit < 0) { msg.textContent = "Valid dates, parties, and non-negative amounts are required."; return; }
@@ -2977,7 +2978,7 @@ function makeContractFromSubmission(id) {
   draft.start_date = s.moving_date || draft.start_date;
   draft.payment_mode = s.cheque_count ? `${s.cheque_count} cheque(s)` : draft.payment_mode;
   draft.additional_terms = s.notes || "";
-  draft.details = { ...draft.details, lessorName: s.owner_name || "", lessorEmail: s.owner_email || "",
+  draft.details = { ...draft.details, agentName: s.agent_name || s.submitted_by_name || draft.details.agentName || "", lessorName: s.owner_name || "", lessorEmail: s.owner_email || "",
     lessorEmiratesId: s.owner_emirates_id || "", tenantEmail: s.tenant_email || "", tenantEmiratesId: s.tenant_emirates_id || "",
     buildingName: s.building || "", propertyNo: s.unit || "", location: s.area || "",
     premisesNo: s.dewa_number || "", contractValue: s.price ?? "" };
