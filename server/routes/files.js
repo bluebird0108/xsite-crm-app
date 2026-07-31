@@ -24,7 +24,7 @@ function resolveSafe(key) {
 
 // Upload: role owner/admin/accounts/agent (mirrors documents_insert policy).
 router.post("/upload", authMiddleware, upload.single("file"), (req, res) => {
-  if (!need(req.user, ["owner", "admin", "accounts", "agent"])) return res.status(403).json({ error: "Not authorized" });
+  if (!need(req.user, ["owner", "admin", "manager", "accounts", "agent"])) return res.status(403).json({ error: "Not authorized" });
   const key = req.body.path;
   if (!key || !req.file) return res.status(400).json({ error: "Missing path or file" });
   const abs = resolveSafe(key);
@@ -56,9 +56,9 @@ router.get("/raw/:token", (req, res) => {
   } catch (e) { res.status(401).send("Link expired"); }
 });
 
-// Remove: owner/admin (documents_delete policy).
+// Remove: owner/admin/manager (documents_delete policy).
 router.post("/remove", authMiddleware, (req, res) => {
-  if (!need(req.user, ["owner", "admin"])) return res.status(403).json({ error: "Not authorized" });
+  if (!need(req.user, ["owner", "admin", "manager"])) return res.status(403).json({ error: "Not authorized" });
   for (const key of req.body.paths || []) {
     const abs = resolveSafe(key);
     if (abs && fs.existsSync(abs)) { try { fs.unlinkSync(abs); } catch { /* ignore */ } }

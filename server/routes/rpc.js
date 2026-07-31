@@ -6,7 +6,9 @@ const { q, tx, sqlInsert, sqlUpdate, pick, coerce } = require("../db");
 const { need } = require("../auth");
 
 const MONEY = ["owner", "accounts"];
-const MANAGE = ["owner", "admin"];
+// "manager" mirrors "admin" for management actions (contracts, contacts, roles).
+// Cash updates stay MONEY-only, so manager (like admin) cannot touch cash.
+const MANAGE = ["owner", "admin", "manager"];
 const MONEY_REQUESTS = ["salary_advance", "commission_payout", "commission_query", "deal_correction"];
 const ym = (d) => (d ? String(d).slice(0, 7) : null);
 
@@ -218,7 +220,7 @@ const HANDLERS = {
     const reqRow = (await q("select * from agent_requests where id=$1", [p.p_id])).rows[0];
     if (!reqRow) throw err("Request not found");
     const money = MONEY_REQUESTS.includes(reqRow.request_type);
-    const ok = u.role === "owner" || (u.role === "accounts" && money) || (u.role === "admin" && !money);
+    const ok = u.role === "owner" || (u.role === "accounts" && money) || ((u.role === "admin" || u.role === "manager") && !money);
     if (!ok) throw err("Not authorized to review this request type");
     if (p.p_expected_updated_at) {
       const r = await q("update agent_requests set status=$1, response=$2, updated_at=now() where id=$3 and updated_at=$4 returning id",
@@ -231,7 +233,7 @@ const HANDLERS = {
   },
   async set_member_role(u, p) {
     if (!need(u, MANAGE)) throw err("Only Owner or Admin can assign roles");
-    const valid = ["owner", "accounts", "admin", "agent", "pending"];
+    const valid = ["owner", "accounts", "admin", "manager", "agent", "pending"];
     if (!valid.includes(p.p_role)) throw err("Invalid role");
     const target = (await q("select role from profiles where id=$1", [p.p_id])).rows[0];
     if (!target) throw err("Member not found");

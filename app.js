@@ -159,18 +159,18 @@ async function loadData() {
     fetchAll("agents", "name"),
     fetchAll("deals", "sno"),
     fetchAll("commission_entries", "agent_name"),
-    roleIn("owner", "accounts", "admin") ? fetchAll("cash_position", "sort_order") : Promise.resolve({ data: [] }),
-    roleIn("owner", "admin") ? fetchAll("profiles", "created_at") : Promise.resolve({ data: [] }),
-    roleIn("owner", "accounts", "admin") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
-    roleIn("owner", "admin", "accounts") ? fetchAllSafe("staff", "name", true, true) : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts") ? fetchAll("cash_position", "sort_order") : Promise.resolve({ data: [] }),
+    roleIn("owner", "admin", "manager") ? fetchAll("profiles", "created_at") : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin", "manager") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
+    roleIn("owner", "admin", "manager", "accounts") ? fetchAllSafe("staff", "name", true, true) : Promise.resolve({ data: [] }),
     fetchAll("agent_requests", "created_at", false),
     fetchAllOptional("contracts", "created_at", false),
-    roleIn("owner", "accounts", "admin") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
-    roleIn("owner", "accounts", "admin") ? fetchAllSafe("contacts", "name", true, true) : Promise.resolve({ data: [] }),
-    roleIn("owner", "accounts", "admin") ? fetchAllSafe("cash_movements", "movement_date", false) : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin", "manager") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin", "manager") ? fetchAllSafe("contacts", "name", true, true) : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts") ? fetchAllSafe("cash_movements", "movement_date", false) : Promise.resolve({ data: [] }),
     fetchAllSafe("contract_files", "created_at", false),
     fetchAllSafe("deal_submissions", "created_at", false),
-    roleIn("owner", "accounts", "admin") ? fetchAllSafe("kyc_forms", "created_at", false) : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin", "manager") ? fetchAllSafe("kyc_forms", "created_at", false) : Promise.resolve({ data: [] }),
   ]);
   state.agents = requireData(ag, "Could not load agents");
   state.deals = requireData(dl, "Could not load deals");
@@ -246,8 +246,8 @@ async function reloadCashMovements() {
 async function reloadContracts() {
   const [contracts, tasks, docs] = await Promise.all([
     fetchAllOptional("contracts", "created_at", false),
-    roleIn("owner", "accounts", "admin") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
-    roleIn("owner", "accounts", "admin") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin", "manager") ? fetchAll("account_tasks", "created_at", false) : Promise.resolve({ data: [] }),
+    roleIn("owner", "accounts", "admin", "manager") ? fetchAll("money_docs", "doc_no") : Promise.resolve({ data: [] }),
   ]);
   state.contracts = requireData(contracts, "Could not reload contracts");
   state.accountTasks = requireData(tasks, "Could not reload Accounts tasks");
@@ -423,7 +423,7 @@ function navLink(screen, label) {
 }
 function renderApp() {
   const p = state.profile;
-  const showTeam = roleIn("owner", "admin");
+  const showTeam = roleIn("owner", "admin", "manager");
   const pendingTeam = state.team.filter((t) => t.role === "pending").length;
   const pendingRequests = state.requests.filter((request) => request.status === "pending").length;
   const newSubs = state.submissions.filter((sub) => sub.status === "submitted").length;
@@ -433,15 +433,15 @@ function renderApp() {
   const nav = `
   <nav class="nav">
     <div class="nav-brand"><img src="./xsite-logo.png" alt="Xsite"></div>
-    ${roleIn("owner", "accounts", "admin") ? navLink("dashboard", "Dashboard") : ""}
+    ${roleIn("owner", "accounts", "admin", "manager") ? navLink("dashboard", "Dashboard") : ""}
     ${roleIn("owner") ? navLink("activity", "Team Activity") : ""}
-    ${roleIn("owner", "admin") ? navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts") : ""}
-    ${roleIn("owner", "admin") ? navLink("contacts", "Contacts") : ""}
+    ${roleIn("owner", "admin", "manager") ? navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts") : ""}
+    ${roleIn("owner", "admin", "manager") ? navLink("contacts", "Contacts") : ""}
     ${roleIn("owner", "accounts") ? navLink("transactions", "Transactions") : ""}
     ${roleIn("owner", "accounts", "agent") ? navLink("ledgers", roleIn("agent") ? "My Ledger" : "Agent Ledgers") : ""}
-    ${roleIn("owner", "admin", "agent") ? navLink("submissions", newSubs ? `Submissions (${newSubs})` : "Submissions") : ""}
+    ${roleIn("owner", "admin", "manager", "agent") ? navLink("submissions", newSubs ? `Submissions (${newSubs})` : "Submissions") : ""}
     ${roleIn("pending") ? "" : navLink("requests", pendingRequests ? `Requests (${pendingRequests})` : "Requests")}
-    ${roleIn("owner", "admin") ? navLink("staff", "Staff") : ""}
+    ${roleIn("owner", "admin", "manager") ? navLink("staff", "Staff") : ""}
     ${showTeam ? navLink("team", pendingTeam ? `Team (${pendingTeam})` : "Team") : ""}
     <div class="nav-right">
       <span class="tag tag-neutral">${esc(p.role)}</span>
@@ -454,13 +454,13 @@ function renderApp() {
   if (state.fatalError) body = viewFatalError();
   else if (roleIn("pending")) body = viewPending();
   else if (state.screen === "activity" && roleIn("owner")) body = viewTeamActivity();
-  else if (state.screen === "contacts" && roleIn("owner", "admin")) body = viewContacts();
+  else if (state.screen === "contacts" && roleIn("owner", "admin", "manager")) body = viewContacts();
   else if (["transactions", "invoices", "commission", "cashbank"].includes(state.screen) && roleIn("owner", "accounts")) body = viewAccountsHub();
-  else if (state.screen === "contracts" && roleIn("owner", "admin")) body = viewContracts();
+  else if (state.screen === "contracts" && roleIn("owner", "admin", "manager")) body = viewContracts();
   else if (state.screen === "ledgers" && roleIn("owner", "accounts", "agent")) body = viewLedgers();
-  else if (state.screen === "submissions" && roleIn("owner", "admin", "agent")) body = viewSubmissions();
+  else if (state.screen === "submissions" && roleIn("owner", "admin", "manager", "agent")) body = viewSubmissions();
   else if (state.screen === "requests") body = viewRequests();
-  else if (state.screen === "staff" && roleIn("owner", "admin")) body = viewStaff();
+  else if (state.screen === "staff" && roleIn("owner", "admin", "manager")) body = viewStaff();
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else if (roleIn("agent")) body = viewLedgers();
   else body = viewDashboard();
@@ -548,7 +548,7 @@ function viewStaff() {
   const expired = state.staff.filter((s) => permitStatus(s).status === "expired");
   const expiringSoon = state.staff.filter((s) => permitStatus(s).status === "expiring");
   const attention = [...expired, ...expiringSoon].sort((a, b) => a.card_expiry.localeCompare(b.card_expiry));
-  const canEdit = roleIn("owner", "admin");
+  const canEdit = roleIn("owner", "admin", "manager");
   const permitMeta = {
     expired: { label: "Permit expired", cls: "is-expired" },
     expiring: { label: "Expiring soon", cls: "is-expiring" },
@@ -639,12 +639,12 @@ const MONEY_REQUESTS = ["salary_advance", "commission_payout", "commission_query
 function canReviewRequest(request) {
   if (roleIn("owner")) return true;
   if (roleIn("accounts")) return MONEY_REQUESTS.includes(request.request_type);
-  if (roleIn("admin")) return !MONEY_REQUESTS.includes(request.request_type);
+  if (roleIn("admin", "manager")) return !MONEY_REQUESTS.includes(request.request_type);
   return false;
 }
 function viewRequests() {
   const canSubmit = roleIn("agent");
-  const canReview = roleIn("owner", "accounts", "admin");
+  const canReview = roleIn("owner", "accounts", "admin", "manager");
   const statuses = ["All", "pending", "in_review", "resolved", "rejected"];
   const tabs = statuses.map((status) => `<button class="tab ${state.requestStatus === status ? "is-active" : ""}" data-requeststatus="${status}">${status === "All" ? "All" : requestStatusLabel(status)}</button>`).join("");
   const rows = state.requests.filter((request) => state.requestStatus === "All" || request.status === state.requestStatus);
@@ -807,7 +807,7 @@ function openContractForm(contract = null) {
 // the matching invoice or receipt without re-keying anything. Rendered on both
 // the Contracts screen (owner/admin oversight) and Invoices (accounts action).
 function contractHandoffSection() {
-  if (!roleIn("owner", "accounts", "admin") || !state.accountTasks.length) return "";
+  if (!roleIn("owner", "accounts", "admin", "manager") || !state.accountTasks.length) return "";
   const canFulfill = roleIn("owner", "accounts");
   // Only contracts still awaiting a receipt/invoice belong here — once Accounts
   // has issued the document the task is done and drops off this list.
@@ -837,9 +837,9 @@ function contractHandoffSection() {
 }
 
 function viewContracts() {
-  const canManage = roleIn("owner", "admin");
+  const canManage = roleIn("owner", "admin", "manager");
   const canFulfill = roleIn("owner", "accounts");
-  const canEjari = roleIn("owner", "admin", "accounts");
+  const canEjari = roleIn("owner", "admin", "manager", "accounts");
   const reminders = state.contracts.filter((c) => c.status === "final")
     .map((contract) => ({ contract, renewal: renewalStatus(contract.end_date) }))
     .filter((item) => ["due", "expired"].includes(item.renewal.status))
@@ -1005,7 +1005,7 @@ function viewContractPrint() {
 function viewTeam() {
   const isOwner = roleIn("owner");
   const agentNames = allLedgerNames();
-  const assignable = isOwner ? ["pending", "agent", "accounts", "admin", "owner"] : ["pending", "agent", "accounts", "admin"];
+  const assignable = isOwner ? ["pending", "agent", "accounts", "admin", "manager", "owner"] : ["pending", "agent", "accounts", "admin", "manager"];
   const roleOpts = (cur) => (assignable.includes(cur) ? assignable : [...assignable, cur])
     .map((r) => `<option value="${r}" ${r === cur ? "selected" : ""}>${r}</option>`).join("");
   const agentOpts = (cur) => `<option value="">— none —</option>` + agentNames
@@ -1117,7 +1117,7 @@ function viewDashboard() {
   const avgPerDeal = deals.length ? Math.round(totc / deals.length) : 0;
   const tiers = expiryTiers();
   const expiringSoon = tiers.slice(1).reduce((s, t) => s + t.items.length, 0);
-  const kicker = p.role === "owner" ? "Owner / Overview" : p.role === "accounts" ? "Accounts workspace" : "Admin workspace";
+  const kicker = p.role === "owner" ? "Owner / Overview" : p.role === "accounts" ? "Accounts workspace" : p.role === "manager" ? "Manager workspace" : "Admin workspace";
   const kpis = `
   <section class="md-kpi-grid">
     <div class="md-kpi is-accent"><span class="card-kicker">Deals this month</span><span class="md-kpi-value">${deals.length}</span><span class="md-kpi-detail">${monthLabel(state.txMonth)} register</span></div>
@@ -1125,7 +1125,7 @@ function viewDashboard() {
     <div class="md-kpi"><span class="card-kicker">Avg. per deal</span><span class="md-kpi-value">${money(avgPerDeal)}</span><span class="md-kpi-detail">Total commission ÷ deals</span></div>
     <div class="md-kpi"><span class="card-kicker">Expiring ≤90 days</span><span class="md-kpi-value">${expiringSoon}</span><span class="md-kpi-detail">${tiers[0].items.length} already expired</span></div>
   </section>`;
-  const collectPanel = roleIn("owner", "accounts", "admin") ? `
+  const collectPanel = roleIn("owner", "accounts", "admin", "manager") ? `
     <div class="md-collect" role="group" aria-label="Commission collection rate">
       <div class="md-collect-top"><span class="card-kicker">Collection rate</span><span class="md-collect-pct">${collectRate}%</span></div>
       <div class="md-meter"><div class="md-meter-fill" style="width:${collectRate}%"></div></div>
@@ -1140,7 +1140,7 @@ function viewDashboard() {
   const isLatestCash = state.cashDate === cashDates[0];
   const cashDateOpts = cashDates.map((d) =>
     `<option value="${d}" ${d === state.cashDate ? "selected" : ""}>${showDate(d)}${d === cashDates[0] ? " (latest)" : ""}</option>`).join("");
-  const cashCard = roleIn("owner", "accounts", "admin") ? `
+  const cashCard = roleIn("owner", "accounts") ? `
     <section class="md-section">
       <div class="md-section-header"><h3>Cash position</h3>
         <span style="display:flex;gap:8px;align-items:center">
@@ -1283,7 +1283,7 @@ function viewTransactions() {
   const tiers = expiryTiers();
   const hasExp = tiers.some((t) => t.items.length);
   const q = state.txQuery.trim().toLowerCase();
-  const canAdd = roleIn("owner", "accounts", "admin");
+  const canAdd = roleIn("owner", "accounts", "admin", "manager");
   const canEdit = roleIn("owner", "accounts");
   const months = availableMonths(state.deals, "month");
   const monthTabs = months.map((m) =>
@@ -2347,7 +2347,7 @@ function contactFormFromRow(c) {
     email: c.email || "", last_contact: c.last_contact || "", birthday: c.birthday || "", notes: c.notes || "", msg: "" };
 }
 function viewContacts() {
-  const canManage = roleIn("owner", "admin");
+  const canManage = roleIn("owner", "admin", "manager");
   const q = state.contactQuery.trim().toLowerCase();
   const typeTabs = ["All", ...CONTACT_TYPES].map((t) =>
     `<button class="tab ${state.contactType === t ? "is-active" : ""}" data-contacttype="${esc(t)}">${esc(t)}${t === "All" ? ` (${state.contacts.length})` : ""}</button>`).join("");
@@ -2438,7 +2438,7 @@ async function deleteContact(id) {
 // After a contract is saved, keep landlord + tenant in the contacts directory
 // (best-effort; ignores duplicates and permission failures silently).
 async function syncContractContacts(contract) {
-  if (!roleIn("owner", "admin") || !contract) return;
+  if (!roleIn("owner", "admin", "manager") || !contract) return;
   const parties = [
     { name: contract.p_landlord_name, type: "Landlord", phone: contract.p_owner_phone },
     { name: contract.p_tenant_name, type: "Tenant", phone: contract.p_tenant_phone },
@@ -2838,7 +2838,7 @@ function dailyControl() {
 function dashboardSearch(query) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  const can = { contacts: roleIn("owner", "admin"), contracts: roleIn("owner", "admin"), transactions: roleIn("owner", "accounts") };
+  const can = { contacts: roleIn("owner", "admin", "manager"), contracts: roleIn("owner", "admin", "manager"), transactions: roleIn("owner", "accounts") };
   const out = [];
   if (can.contacts) for (const c of state.contacts) {
     if ([c.name, c.phone, c.email, c.contact_type].join(" ").toLowerCase().includes(q))
@@ -2908,7 +2908,7 @@ function viewTeamActivity() {
   const day = state.activityDay && days.includes(state.activityDay) ? state.activityDay : (days[0] || todayIso());
   const dayEntries = entries.filter((e) => e.day === day);
   // Working staff only (admin + accounts) — owners oversee, they don't get a card.
-  const workers = state.team.filter((t) => ["admin", "accounts"].includes(t.role));
+  const workers = state.team.filter((t) => ["admin", "manager", "accounts"].includes(t.role));
   const cards = workers.map((w) => {
     const mine = dayEntries.filter((e) => e.userId === w.id);
     const byDept = {};
@@ -2971,8 +2971,8 @@ function viewFilesModal() {
   if (!f) return "";
   const contract = state.contracts.find((c) => c.id === f.contractId);
   if (!contract) return "";
-  const canUpload = roleIn("owner", "admin", "accounts");
-  const canDelete = roleIn("owner", "admin");
+  const canUpload = roleIn("owner", "admin", "manager", "accounts");
+  const canDelete = roleIn("owner", "admin", "manager");
   const linkedSub = state.submissions.find((x) => x.contract_id === f.contractId);
   const rows = state.contractFiles
     .filter((x) => x.contract_id === f.contractId || (linkedSub && x.submission_id === linkedSub.id))
@@ -3066,7 +3066,7 @@ async function reloadSubmissions() {
 
 function viewSubmissions() {
   const isAgent = roleIn("agent");
-  const canReview = roleIn("owner", "admin");
+  const canReview = roleIn("owner", "admin", "manager");
   const rows = state.submissions.map((s) => {
     const files = subFiles(s.id).length;
     return `<tr>
@@ -3087,7 +3087,7 @@ function viewSubmissions() {
     <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div><span class="card-kicker">${isAgent ? "Agent" : "Admin"} / Deal intake</span><h1 style="margin-top:4px">${isAgent ? "My Submissions" : "Deal Submissions"}</h1>
       <p class="text-muted" style="margin:0">${isAgent ? "Send owner and tenant details with documents — admin makes the contract." : `${pending} new submission${pending === 1 ? "" : "s"} awaiting a contract.`}</p></div>
-      ${roleIn("agent", "owner", "admin") ? `<button class="btn btn-primary" id="newsub">+ New submission</button>` : ""}
+      ${roleIn("agent", "owner", "admin", "manager") ? `<button class="btn btn-primary" id="newsub">+ New submission</button>` : ""}
     </div>
     <div class="sheet"><div class="sheet-hint">${state.submissions.length} submissions</div>
       <div class="table-wrap"><table class="grid" style="min-width:1100px">
@@ -3161,7 +3161,7 @@ function viewSubDetail() {
         </tbody></table></div>` : `<p class="text-muted" style="font-size:12px">No documents attached.</p>`}
       </div>
       <div class="modal-actions"><button class="btn btn-secondary" id="sdcancel">Close</button>
-        ${roleIn("owner", "admin") && s.status !== "converted" ? `<button class="btn btn-primary" data-makecontract="${s.id}">Make contract from this</button>` : ""}</div>
+        ${roleIn("owner", "admin", "manager") && s.status !== "converted" ? `<button class="btn btn-primary" data-makecontract="${s.id}">Make contract from this</button>` : ""}</div>
     </div></div></div>`;
 }
 
