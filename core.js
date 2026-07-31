@@ -48,6 +48,23 @@ export function calculateDealCommission(totalCommission, commissionReceived, sha
   return { vat, commissionExVat, agentBusiness, companyShare, agentShare };
 }
 
+// Commission derived from the property price and a rate: 5% residential,
+// 10% commercial. The rate gives the ex-VAT commission; 5% VAT is added on top.
+// total_commission is VAT-inclusive; shares are halved again for a shared deal.
+export function calculateDealCommissionFromRate(price, ratePercent, shared = false) {
+  const p = Number(price);
+  const rate = Number(ratePercent);
+  if (!Number.isFinite(p) || !Number.isFinite(rate) || p <= 0 || rate <= 0) return null;
+
+  const commissionExVat = roundMoney((p * rate) / 100);
+  const vat = roundMoney(commissionExVat * 0.05);
+  const totalCommission = roundMoney(commissionExVat + vat);
+  const agentBusiness = roundMoney(shared ? commissionExVat / 2 : commissionExVat);
+  const companyShare = roundMoney(agentBusiness / 2);
+  const agentShare = roundMoney(agentBusiness / 2);
+  return { totalCommission, vat, commissionExVat, agentBusiness, companyShare, agentShare };
+}
+
 export function calculateContractEnd(startIso, durationMonths) {
   if (!ISO_DATE.test(startIso || "")) return "";
   const months = Number.parseInt(durationMonths, 10);

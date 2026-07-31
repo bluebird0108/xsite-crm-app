@@ -4,6 +4,7 @@ import {
   availableMonths,
   calculateContractEnd,
   calculateDealCommission,
+  calculateDealCommissionFromRate,
   getStaffPermitStatus,
   monthLabel,
   renewalStatus,
@@ -88,7 +89,7 @@ function clearSensitiveState() {
 }
 const COLUMNS = {
   agents: "id,name,role,month,agent_business_including_vat",
-  deals: "id,group_id,sno,deal_date,deal_date_raw,agent,agent2,third_party,deal_type,unit,building,area,price,total_commission,commission_received,vat,commission_ex_vat,agent_business,company_share,agent_share,payment_method,tc_start,tc_start_raw,contract_duration,tc_end,tc_end_raw,security_deposit,cheque_count,landlord,tenant,bank,month",
+  deals: "id,group_id,sno,deal_date,deal_date_raw,agent,agent2,third_party,deal_type,unit,building,area,price,total_commission,commission_received,vat,commission_ex_vat,agent_business,company_share,agent_share,payment_method,tc_start,tc_start_raw,contract_duration,tc_end,tc_end_raw,security_deposit,cheque_count,cheque_details,property_use,landlord,tenant,bank,month",
   commission_entries: "id,group_id,agent_name,entry_date,entry_date_raw,third_party,agent2,deal_type,unit,building,area,annual_value,total_commission,received,vat,commission_ex_vat,agent_business,xsite_share,agent_share,month",
   cash_position: "id,as_at,label,amount,sort_order,month",
   profiles: "id,full_name,email,role,agent_name,created_at",
@@ -1354,10 +1355,10 @@ function viewTransactions() {
 function emptyDealForm() {
   const today = todayIso();
   return { groupId: null, editIds: [], deal_date: today, agent: "", agent2: "", third_party: "",
-    deal_type: "Rent", unit: "", building: "", area: "", price: "", total_commission: "",
+    deal_type: "Rent", unit: "", building: "", area: "", price: "", property_use: "Residential", total_commission: "",
     commission_received: "", vat: "", commission_ex_vat: "", agent_business: "",
     company_share: "", agent_share: "", payment_method: "", tc_start: "", duration: "12",
-    tc_end: "", security_deposit: "", cheque_count: "", landlord: "", tenant: "", bank: "", msg: "" };
+    tc_end: "", security_deposit: "", cheque_count: "", cheque_details: "", landlord: "", tenant: "", bank: "", msg: "" };
 }
 function dealFormFromRow(d) {
   const group = state.deals.filter((x) => x.group_id === d.group_id);
@@ -1366,12 +1367,13 @@ function dealFormFromRow(d) {
     third_party: d.third_party === "N/A" ? "" : (d.third_party || ""),
     deal_type: (d.deal_type || "Rent").replace("Off plan", "Off Plan"), unit: d.unit || "",
     building: d.building || "", area: d.area || "", price: d.price ?? "",
+    property_use: d.property_use || "Residential",
     total_commission: d.total_commission ?? "", commission_received: d.commission_received ?? "",
     vat: d.vat ?? "", commission_ex_vat: d.commission_ex_vat ?? "", agent_business: d.agent_business ?? "",
     company_share: d.company_share ?? "", agent_share: d.agent_share ?? "",
     payment_method: d.payment_method || "", tc_start: d.tc_start || "",
     duration: d.contract_duration || "12", tc_end: d.tc_end || "",
-    security_deposit: d.security_deposit ?? "", cheque_count: d.cheque_count || "",
+    security_deposit: d.security_deposit ?? "", cheque_count: d.cheque_count || "", cheque_details: d.cheque_details || "",
     landlord: d.landlord || "", tenant: d.tenant || "", bank: d.bank || "", msg: "" };
 }
 function viewDealModal() {
@@ -1398,8 +1400,9 @@ function viewDealModal() {
           ${field("building", "Building")}
           ${field("area", "Area")}
           ${field("price", "Annual rent / sale price", "number")}
-          <div class="form-section">Commission — auto-calculated, editable</div>
-          ${field("total_commission", "Total commission", "number")}
+          <div class="form-section">Commission — auto-calculated from rent/price × rate + 5% VAT, editable</div>
+          <div class="field"><label for="f_property_use">Property use</label><select class="input" id="f_property_use"><option ${f.property_use === "Residential" ? "selected" : ""}>Residential</option><option ${f.property_use === "Commercial" ? "selected" : ""}>Commercial</option></select><span class="text-muted" style="font-size:11px">Residential 5% · Commercial 10%</span></div>
+          ${field("total_commission", "Total commission (incl VAT)", "number")}
           ${field("commission_received", "Commission received", "number")}
           ${field("vat", "VAT @ 5%", "number")}
           ${field("commission_ex_vat", "Commission ex-VAT", "number")}
@@ -1414,6 +1417,7 @@ function viewDealModal() {
           ${field("tc_end", "TC end (auto)", "date")}
           ${field("security_deposit", "Security deposit", "number")}
           ${field("cheque_count", "No. of cheques")}
+          ${field("cheque_details", "Cheque details", "text", 'placeholder="e.g. 4 chq of 25k, Mashreq, due Jul/Oct/Jan/Apr"')}
           ${field("bank", "Bank")}
           ${field("landlord", "Landlord (L.L name)")}
           ${field("tenant", "Tenant")}
@@ -1431,24 +1435,30 @@ function viewDealModal() {
 function collectDealForm() {
   const f = state.dealForm;
   ["deal_date","deal_type","unit","agent","agent2","third_party","building","area","price",
-   "total_commission","commission_received","vat","commission_ex_vat","agent_business",
+   "property_use","total_commission","commission_received","vat","commission_ex_vat","agent_business",
    "company_share","agent_share","payment_method","tc_start","duration","tc_end",
-   "security_deposit","cheque_count","bank","landlord","tenant"].forEach((k) => {
+   "security_deposit","cheque_count","cheque_details","bank","landlord","tenant"].forEach((k) => {
     const el = document.getElementById("f_" + k); if (el) f[k] = el.value;
   });
 }
 function dealAutoMath() {
   collectDealForm();
   const f = state.dealForm;
-  const calculated = calculateDealCommission(f.total_commission, f.commission_received, !!f.agent2.trim());
+  // Commission is derived from the rent/sale price and the property-use rate
+  // (Residential 5%, Commercial 10%), with 5% VAT added on top. All fields stay
+  // editable afterwards. Received defaults to the full total (adjust when partial).
+  const rate = f.property_use === "Commercial" ? 10 : 5;
+  const calculated = calculateDealCommissionFromRate(f.price, rate, !!f.agent2.trim());
   if (calculated) {
+    f.total_commission = calculated.totalCommission;
+    f.commission_received = calculated.totalCommission;
     f.vat = calculated.vat;
     f.commission_ex_vat = calculated.commissionExVat;
     f.agent_business = calculated.agentBusiness;
     f.company_share = calculated.companyShare;
     f.agent_share = calculated.agentShare;
   }
-  ["vat","commission_ex_vat","agent_business","company_share","agent_share"].forEach((k) => {
+  ["total_commission","commission_received","vat","commission_ex_vat","agent_business","company_share","agent_share"].forEach((k) => {
     const el = document.getElementById("f_" + k); if (el) el.value = f[k];
   });
 }
@@ -1476,6 +1486,7 @@ async function saveDeal() {
     group_id: groupId, deal_date: f.deal_date, month,
     third_party: txt(f.third_party, "N/A"),
     deal_type: f.deal_type, unit: txt(f.unit), building: txt(f.building), area: txt(f.area),
+    property_use: f.property_use || "Residential",
     price: num(f.price), total_commission: num(f.total_commission),
     commission_received: num(f.commission_received), vat: num(f.vat),
     commission_ex_vat: num(f.commission_ex_vat), agent_business: num(f.agent_business),
@@ -1483,7 +1494,7 @@ async function saveDeal() {
     payment_method: txt(f.payment_method),
     tc_start: f.tc_start || null, contract_duration: txt(f.duration),
     tc_end: f.tc_end || null,
-    security_deposit: num(f.security_deposit), cheque_count: txt(f.cheque_count),
+    security_deposit: num(f.security_deposit), cheque_count: txt(f.cheque_count), cheque_details: txt(f.cheque_details),
     landlord: txt(f.landlord), tenant: txt(f.tenant), bank: txt(f.bank),
   };
   const maxSno = state.deals.reduce((m, d) => Math.max(m, d.sno || 0), 0);
@@ -3728,9 +3739,11 @@ function wireModals() {
   const dc = document.getElementById("dealclose"); if (dc) dc.onclick = () => { state.dealForm = null; render(); };
   const dca = document.getElementById("dealcancel"); if (dca) dca.onclick = () => { state.dealForm = null; render(); };
   const ds = document.getElementById("dealsave"); if (ds) ds.onclick = saveDeal;
-  ["f_total_commission", "f_commission_received", "f_agent2"].forEach((id) => {
+  // Commission auto-calculates from price + property use (+ shared agent2).
+  ["f_price", "f_agent2"].forEach((id) => {
     const el = document.getElementById(id); if (el) el.oninput = dealAutoMath;
   });
+  const puEl = document.getElementById("f_property_use"); if (puEl) puEl.onchange = dealAutoMath;
   ["f_tc_start", "f_duration"].forEach((id) => {
     const el = document.getElementById(id); if (el) el.oninput = dealAutoEnd;
   });

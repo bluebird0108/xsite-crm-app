@@ -66,6 +66,8 @@ create table if not exists deals (
   tc_end_raw         text,
   security_deposit   numeric,
   cheque_count       text,
+  cheque_details     text,
+  property_use       text default 'Residential',
   landlord           text,
   tenant             text,
   bank               text,
