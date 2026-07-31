@@ -798,7 +798,7 @@ function contractDraftFromDeal(deal) {
 
 function openContractForm(contract = null) {
   if (contract) state.contractForm = { ...contract, details: { ...(contract.details || {}) }, addendum: { ...(contract.addendum || {}) }, msg: "" };
-  else state.contractForm = contractDraftFromDeal(dealGroupOptions()[0]?.deal);
+  else state.contractForm = contractDraftFromDeal(null);
   render();
 }
 
@@ -881,16 +881,19 @@ function contractInput(id, label, value, type = "text", extra = "") {
 function viewContractModal() {
   const f = state.contractForm;
   if (!f) return "";
-  const dealResolvable = !f.deal_group || dealGroupOptions().some((o) => o.group === f.deal_group);
-  const options = `<option value="" ${!f.deal_group ? "selected" : ""}>— No linked deal —</option>`
-    + (dealResolvable ? "" : `<option value="${esc(f.deal_group)}" selected>— Linked deal (removed from register) —</option>`)
-    + dealGroupOptions().map((o) => `<option value="${o.group}" ${o.group === f.deal_group ? "selected" : ""}>${esc(o.label)}</option>`).join("");
   const d = f.details || {}, a = f.addendum || {};
+  // Agent name is chosen from the known agent ledger names, with a "no agent" option.
+  // Any pre-existing value not in the list stays selectable so it isn't lost on edit.
+  const curAgent = d.agentName || "";
+  const agentNames = allLedgerNames();
+  const agentInList = !curAgent || agentNames.includes(curAgent);
+  const agentOptions = `<option value="" ${!curAgent ? "selected" : ""}>— No agent name —</option>`
+    + (agentInList ? "" : `<option value="${esc(curAgent)}" selected>${esc(curAgent)}</option>`)
+    + agentNames.map((n) => `<option value="${esc(n)}" ${n === curAgent ? "selected" : ""}>${esc(n)}</option>`).join("");
   return `<div class="modal-backdrop"><div class="modal contract-modal" role="dialog" aria-modal="true" aria-labelledby="contracttitle">
     <div class="modal-head"><h3 id="contracttitle">${f.id ? `Edit ${esc(f.contract_no)}` : "New tenancy contract draft"}</h3><button class="modal-close" id="contractclose" aria-label="Close">×</button></div>
     <div class="modal-body"><div class="contract-form-section"><h4>Deal and contract</h4><div class="form-grid">
-      <div class="field"><label for="ct_deal">Related deal</label><select class="input" id="ct_deal">${options}</select></div>
-      ${contractInput("ct_agent","Requesting agent",d.agentName)}
+      <div class="field"><label for="ct_agent">Agent name</label><select class="input" id="ct_agent">${agentOptions}</select></div>
       ${contractInput("ct_contract_date","Contract date",f.contract_date,"date")}${contractInput("ct_start","Start date",f.start_date,"date")}${contractInput("ct_end","End date",f.end_date,"date")}
       ${contractInput("ct_landlord","Landlord / owner",f.landlord_name)}${contractInput("ct_tenant","Tenant",f.tenant_name)}${contractInput("ct_owner_phone","Owner phone",f.owner_phone,"tel")}${contractInput("ct_tenant_phone","Tenant phone",f.tenant_phone,"tel")}
       ${contractInput("ct_rent","Annual rent (AED)",f.annual_rent,"number",'min="0" step="0.01"')}${contractInput("ct_contract_value","Total contract value (AED)",d.contractValue ?? f.annual_rent,"number",'min="0" step="0.01"')}${contractInput("ct_deposit","Security deposit (AED)",f.security_deposit,"number",'min="0" step="0.01"')}${contractInput("ct_payment","Payment mode",f.payment_mode)}
@@ -918,7 +921,7 @@ async function saveContract(status) {
   const value = (id) => document.getElementById(id)?.value?.trim() || "";
   const msg = document.getElementById("contractmsg");
   const payload = {
-    p_id: state.contractForm.id || null, p_deal_group: value("ct_deal") || null, p_status: status,
+    p_id: state.contractForm.id || null, p_deal_group: state.contractForm.deal_group || null, p_status: status,
     p_contract_date: value("ct_contract_date"), p_start_date: value("ct_start"), p_end_date: value("ct_end"),
     p_landlord_name: value("ct_landlord"), p_tenant_name: value("ct_tenant"), p_owner_phone: value("ct_owner_phone"), p_tenant_phone: value("ct_tenant_phone"),
     p_annual_rent: Number(value("ct_rent")), p_security_deposit: Number(value("ct_deposit")), p_payment_mode: value("ct_payment"), p_additional_terms: value("ct_terms"),
@@ -3757,11 +3760,6 @@ function wireModals() {
   const contractCancel = document.getElementById("contractcancel"); if (contractCancel) contractCancel.onclick = () => { state.contractForm = null; render(); };
   const contractDraft = document.getElementById("contractdraft"); if (contractDraft) contractDraft.onclick = () => saveContract("draft");
   const contractFinal = document.getElementById("contractfinal"); if (contractFinal) contractFinal.onclick = () => saveContract("final");
-  const contractDeal = document.getElementById("ct_deal"); if (contractDeal && !state.contractForm?.id) contractDeal.onchange = () => {
-    if (!window.confirm("Change the related deal? Any unsaved contract entries will be replaced.")) { contractDeal.value = state.contractForm.deal_group; return; }
-    const deal = dealGroupOptions().find((option) => option.group === contractDeal.value)?.deal;
-    state.contractForm = contractDraftFromDeal(deal); render();
-  };
   // contact modal
   const contactClose2 = document.getElementById("contactclose2"); if (contactClose2) contactClose2.onclick = () => { state.contactForm = null; render(); };
   const contactCancel2 = document.getElementById("contactcancel2"); if (contactCancel2) contactCancel2.onclick = () => { state.contactForm = null; render(); };
@@ -3847,7 +3845,7 @@ function wireModals() {
     else if (state.contactForm) { state.contactForm = null; render(); }
     else if (state.cashMoveForm) { state.cashMoveForm = null; render(); }
   };
-  if (state.contractForm) document.getElementById("ct_deal")?.focus();
+  if (state.contractForm) document.getElementById("ct_agent")?.focus();
   else if (state.printContract) document.getElementById("printclose")?.focus();
 }
 function rerenderTx() {
