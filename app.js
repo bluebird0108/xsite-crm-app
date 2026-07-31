@@ -853,7 +853,7 @@ function viewContracts() {
       : canEjari
         ? `<button class="btn btn-mini ${ejariRegistered ? "btn-secondary" : "btn-primary"}" data-toggleejari="${contract.id}">${ejariRegistered ? "Registered" : "Register Ejari"}</button> <button class="btn btn-secondary btn-mini" data-ejariportal="${contract.id}" title="Open the Ejari portal with all values ready to copy">Portal</button>`
         : `<span class="tag ${ejariRegistered ? "tag-neutral" : "tag-accent"}">${ejariRegistered ? "Registered" : "Pending"}</span>`;
-    return `<tr><td><strong>${esc(contract.contract_no)}</strong></td><td>${esc(dealLabelFor(contract.deal_group))}${contract.details?.agentName ? `<div class="text-muted" style="font-size:11px">Agent: ${esc(contract.details.agentName)}</div>` : ""}</td>
+    return `<tr><td><strong>${esc(contract.contract_no)}</strong></td><td>${contract.details?.agentName ? esc(contract.details.agentName) : `<span class="text-muted">No agent</span>`}</td>
       <td>${esc(contract.landlord_name)} → ${esc(contract.tenant_name)}</td><td>${showDate(contract.start_date)} – ${showDate(contract.end_date)}</td>
       <td><span class="tag ${contract.status === "draft" ? "tag-accent" : "tag-neutral"}">${esc(contract.status)}</span></td>
       <td>${ejariCell}</td>
@@ -869,7 +869,7 @@ function viewContracts() {
       <div class="expiry-list">${reminders.map(({contract,renewal}) => `<div class="expiry-row"><div><strong>${esc(contract.contract_no)} · ${esc(contract.tenant_name)}</strong><div class="text-muted">${esc(dealLabelFor(contract.deal_group))} · ends ${showDate(contract.end_date)}</div></div><span class="${renewal.status === "expired" ? "expiry-days is-overdue" : "expiry-days"}">${renewal.status === "expired" ? `${Math.abs(renewal.days)}d overdue` : `${renewal.days}d left`}</span></div>`).join("")}</div></section>` : ""}
     ${contractHandoffSection()}
     <div class="sheet"><div class="sheet-hint">${roleIn("agent") ? "Only finalized contracts linked to your deals are visible" : `${state.contracts.length} saved contract records`}</div>
-      <div class="table-wrap"><table class="grid" style="min-width:1080px"><thead><tr><th>Contract</th><th>Deal</th><th>Parties</th><th>Term</th><th>Status</th><th>Ejari</th><th>Renewal</th><th></th></tr></thead><tbody>${contractRows || `<tr><td colspan="8"><div class="md-empty" style="border:0">No contracts yet.</div></td></tr>`}</tbody></table></div></div>
+      <div class="table-wrap"><table class="grid" style="min-width:1080px"><thead><tr><th>Contract</th><th>Agent</th><th>Parties</th><th>Term</th><th>Status</th><th>Ejari</th><th>Renewal</th><th></th></tr></thead><tbody>${contractRows || `<tr><td colspan="8"><div class="md-empty" style="border:0">No contracts yet.</div></td></tr>`}</tbody></table></div></div>
   </div>`;
 }
 
