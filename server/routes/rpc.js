@@ -58,6 +58,7 @@ const HANDLERS = {
       agent_name: p.p_agent_name, entry_date: p.p_entry_date, month: ym(p.p_entry_date),
       third_party: p.p_third_party, agent2: p.p_agent2, deal_type: p.p_deal_type,
       unit: p.p_unit, building: p.p_building, area: p.p_area, annual_value: p.p_annual_value,
+      property_use: p.p_property_use || "Residential",
       total_commission: p.p_total_commission, received: p.p_received, vat: p.p_vat,
       commission_ex_vat: p.p_commission_ex_vat, agent_business: p.p_agent_business,
       xsite_share: p.p_xsite_share, agent_share: p.p_agent_share,

@@ -89,6 +89,7 @@ create table if not exists commission_entries (
   building          text,
   area              text,
   annual_value      numeric,
+  property_use      text default 'Residential',
   total_commission  numeric,
   received          numeric,
   vat               numeric,

@@ -3,7 +3,6 @@ import {
   availableDates,
   availableMonths,
   calculateContractEnd,
-  calculateDealCommission,
   calculateDealCommissionFromRate,
   getStaffPermitStatus,
   monthLabel,
@@ -90,7 +89,7 @@ function clearSensitiveState() {
 const COLUMNS = {
   agents: "id,name,role,month,agent_business_including_vat",
   deals: "id,group_id,sno,deal_date,deal_date_raw,agent,agent2,third_party,deal_type,unit,building,area,price,total_commission,commission_received,vat,commission_ex_vat,agent_business,company_share,agent_share,payment_method,tc_start,tc_start_raw,contract_duration,tc_end,tc_end_raw,security_deposit,cheque_count,cheque_details,property_use,landlord,tenant,bank,month",
-  commission_entries: "id,group_id,agent_name,entry_date,entry_date_raw,third_party,agent2,deal_type,unit,building,area,annual_value,total_commission,received,vat,commission_ex_vat,agent_business,xsite_share,agent_share,month",
+  commission_entries: "id,group_id,agent_name,entry_date,entry_date_raw,third_party,agent2,deal_type,unit,building,area,annual_value,property_use,total_commission,received,vat,commission_ex_vat,agent_business,xsite_share,agent_share,month",
   cash_position: "id,as_at,label,amount,sort_order,month",
   profiles: "id,full_name,email,role,agent_name,created_at",
   money_docs: "id,doc_type,doc_no,deal_group,doc_date,client,description,amount,payment_method,status,month,details",
@@ -1504,7 +1503,7 @@ async function saveDeal() {
     group_id: groupId, agent_name: name.toUpperCase(), entry_date: f.deal_date,
     third_party: base.third_party, agent2: arr.length === 2 ? arr[1 - i] : "N/A",
     deal_type: f.deal_type, unit: base.unit, building: base.building, area: base.area,
-    annual_value: base.price, total_commission: base.total_commission,
+    annual_value: base.price, property_use: base.property_use, total_commission: base.total_commission,
     received: base.commission_received, vat: base.vat, commission_ex_vat: base.commission_ex_vat,
     agent_business: base.agent_business, xsite_share: base.company_share,
     agent_share: base.agent_share, month,
@@ -3318,7 +3317,7 @@ function viewCommissionEntry() {
 
 function emptyCeForm() {
   return { id: null, agent_name: "", agent2: "", entry_date: todayIso(), deal_type: "Rent", third_party: "",
-    unit: "", building: "", area: "", annual_value: "", total_commission: "", received: "",
+    unit: "", building: "", area: "", annual_value: "", property_use: "Residential", total_commission: "", received: "",
     vat: "", commission_ex_vat: "", agent_business: "", xsite_share: "", agent_share: "", msg: "" };
 }
 function ceFormFromRow(r) {
@@ -3326,6 +3325,7 @@ function ceFormFromRow(r) {
     entry_date: r.entry_date || todayIso(), deal_type: r.deal_type || "Rent",
     third_party: r.third_party === "N/A" ? "" : (r.third_party || ""),
     unit: r.unit || "", building: r.building || "", area: r.area || "", annual_value: r.annual_value ?? "",
+    property_use: r.property_use || "Residential",
     total_commission: r.total_commission ?? "", received: r.received ?? "", vat: r.vat ?? "",
     commission_ex_vat: r.commission_ex_vat ?? "", agent_business: r.agent_business ?? "",
     xsite_share: r.xsite_share ?? "", agent_share: r.agent_share ?? "", msg: "" };
@@ -3350,8 +3350,9 @@ function viewCeModal() {
         <div class="field" style="grid-column:1/-1"><label for="ce_third_party">Third party (optional)</label><input class="input" id="ce_third_party" value="${esc(f.third_party)}"></div>
         <div class="field"><label for="ce_agent2">Agent 2 (shared — halves the agent business)</label><input class="input" id="ce_agent2" list="celedger" value="${esc(f.agent2)}"></div>
         ${fld("annual_value", "Annual value / price", "number", 'min="0" step="0.01"')}
-        <div class="form-section" style="grid-column:1/-1">Commission — auto-calculated, editable</div>
-        ${fld("total_commission", "Total commission", "number", 'min="0" step="0.01"')}
+        <div class="field"><label for="ce_property_use">Property use</label><select class="input" id="ce_property_use"><option ${f.property_use === "Residential" ? "selected" : ""}>Residential</option><option ${f.property_use === "Commercial" ? "selected" : ""}>Commercial</option></select><span class="text-muted" style="font-size:11px">Residential 5% · Commercial 10%</span></div>
+        <div class="form-section" style="grid-column:1/-1">Commission — auto-calculated from price × rate + 5% VAT, editable</div>
+        ${fld("total_commission", "Total commission (incl VAT)", "number", 'min="0" step="0.01"')}
         ${fld("received", "Received", "number", 'min="0" step="0.01"')}
         ${fld("vat", "VAT @ 5%", "number", 'step="0.01"')}
         ${fld("commission_ex_vat", "Ex-VAT", "number", 'step="0.01"')}
@@ -3368,18 +3369,22 @@ function viewCeModal() {
 
 function collectCeForm() {
   const f = state.ceForm; if (!f) return;
-  ["agent_name","agent2","entry_date","deal_type","third_party","unit","building","area","annual_value",
+  ["agent_name","agent2","entry_date","deal_type","third_party","unit","building","area","annual_value","property_use",
    "total_commission","received","vat","commission_ex_vat","agent_business","xsite_share","agent_share"]
     .forEach((k) => { const el = document.getElementById("ce_" + k); if (el) f[k] = el.value; });
 }
 function ceAutoMath() {
   collectCeForm();
   const f = state.ceForm;
-  const calc = calculateDealCommission(f.total_commission, f.received, !!String(f.agent2).trim());
+  // Same rate-based model as the deal form: price × rate (Residential 5% /
+  // Commercial 10%) + 5% VAT on top. Received defaults to the full total.
+  const rate = f.property_use === "Commercial" ? 10 : 5;
+  const calc = calculateDealCommissionFromRate(f.annual_value, rate, !!String(f.agent2).trim());
   if (!calc) return;
+  f.total_commission = calc.totalCommission; f.received = calc.totalCommission;
   f.vat = calc.vat; f.commission_ex_vat = calc.commissionExVat; f.agent_business = calc.agentBusiness;
   f.xsite_share = calc.companyShare; f.agent_share = calc.agentShare;
-  ["vat","commission_ex_vat","agent_business","xsite_share","agent_share"].forEach((k) => {
+  ["total_commission","received","vat","commission_ex_vat","agent_business","xsite_share","agent_share"].forEach((k) => {
     const el = document.getElementById("ce_" + k); if (el) el.value = f[k];
   });
 }
@@ -3396,6 +3401,7 @@ async function saveCommissionEntry() {
     p_id: f.id, p_agent_name: String(f.agent_name).trim().toUpperCase(), p_entry_date: f.entry_date,
     p_third_party: f.third_party || null, p_agent2: f.agent2 || null, p_deal_type: f.deal_type,
     p_unit: f.unit || null, p_building: f.building || null, p_area: f.area || null,
+    p_property_use: f.property_use || "Residential",
     p_annual_value: num(f.annual_value), p_total_commission: num(f.total_commission), p_received: num(f.received),
     p_vat: num(f.vat), p_commission_ex_vat: num(f.commission_ex_vat), p_agent_business: num(f.agent_business),
     p_xsite_share: num(f.xsite_share), p_agent_share: num(f.agent_share),
@@ -3409,7 +3415,7 @@ async function saveCommissionEntry() {
       agent_name: args.p_agent_name, entry_date: args.p_entry_date, month: args.p_entry_date.slice(0, 7),
       third_party: args.p_third_party || "N/A", agent2: args.p_agent2 || "N/A", deal_type: args.p_deal_type,
       unit: args.p_unit, building: args.p_building, area: args.p_area, annual_value: args.p_annual_value,
-      total_commission: args.p_total_commission, received: args.p_received, vat: args.p_vat,
+      property_use: args.p_property_use, total_commission: args.p_total_commission, received: args.p_received, vat: args.p_vat,
       commission_ex_vat: args.p_commission_ex_vat, agent_business: args.p_agent_business,
       xsite_share: args.p_xsite_share, agent_share: args.p_agent_share,
     };
@@ -3812,9 +3818,10 @@ function wireModals() {
   const ceClose = document.getElementById("ceclose"); if (ceClose) ceClose.onclick = () => { state.ceForm = null; render(); };
   const ceCancel = document.getElementById("cecancel"); if (ceCancel) ceCancel.onclick = () => { state.ceForm = null; render(); };
   const ceSave = document.getElementById("cesave"); if (ceSave) ceSave.onclick = saveCommissionEntry;
-  ["ce_total_commission", "ce_received", "ce_agent2"].forEach((id) => {
+  ["ce_annual_value", "ce_agent2"].forEach((id) => {
     const el = document.getElementById(id); if (el) el.oninput = ceAutoMath;
   });
+  const cePuEl = document.getElementById("ce_property_use"); if (cePuEl) cePuEl.onchange = ceAutoMath;
   // submission modal
   const subClose = document.getElementById("subclose"); if (subClose) subClose.onclick = () => { state.subForm = null; render(); };
   const subCancel = document.getElementById("subcancel"); if (subCancel) subCancel.onclick = () => { state.subForm = null; render(); };
