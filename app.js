@@ -853,7 +853,8 @@ function viewContracts() {
       : canEjari
         ? `<button class="btn btn-mini ${ejariRegistered ? "btn-secondary" : "btn-primary"}" data-toggleejari="${contract.id}">${ejariRegistered ? "Registered" : "Register Ejari"}</button> <button class="btn btn-secondary btn-mini" data-ejariportal="${contract.id}" title="Open the Ejari portal with all values ready to copy">Portal</button>`
         : `<span class="tag ${ejariRegistered ? "tag-neutral" : "tag-accent"}">${ejariRegistered ? "Registered" : "Pending"}</span>`;
-    return `<tr><td><strong>${esc(contract.contract_no)}</strong></td><td>${contract.details?.agentName ? esc(contract.details.agentName) : `<span class="text-muted">No agent</span>`}</td>
+    const agentCell = [contract.details?.agentName, contract.details?.agentName2].filter(Boolean).join(" + ");
+    return `<tr><td><strong>${esc(contract.contract_no)}</strong></td><td>${agentCell ? esc(agentCell) : `<span class="text-muted">No agent</span>`}</td>
       <td>${esc(contract.landlord_name)} → ${esc(contract.tenant_name)}</td><td>${showDate(contract.start_date)} – ${showDate(contract.end_date)}</td>
       <td><span class="tag ${contract.status === "draft" ? "tag-accent" : "tag-neutral"}">${esc(contract.status)}</span></td>
       <td>${ejariCell}</td>
@@ -884,16 +885,19 @@ function viewContractModal() {
   const d = f.details || {}, a = f.addendum || {};
   // Agent name is chosen from the known agent ledger names, with a "no agent" option.
   // Any pre-existing value not in the list stays selectable so it isn't lost on edit.
-  const curAgent = d.agentName || "";
   const agentNames = allLedgerNames();
-  const agentInList = !curAgent || agentNames.includes(curAgent);
-  const agentOptions = `<option value="" ${!curAgent ? "selected" : ""}>— No agent name —</option>`
-    + (agentInList ? "" : `<option value="${esc(curAgent)}" selected>${esc(curAgent)}</option>`)
-    + agentNames.map((n) => `<option value="${esc(n)}" ${n === curAgent ? "selected" : ""}>${esc(n)}</option>`).join("");
+  // Build an agent dropdown for a given current value; any pre-existing value
+  // not in the ledger list stays selectable so it isn't lost on edit.
+  const agentOptionsFor = (cur, emptyLabel) => `<option value="" ${!cur ? "selected" : ""}>${emptyLabel}</option>`
+    + ((!cur || agentNames.includes(cur)) ? "" : `<option value="${esc(cur)}" selected>${esc(cur)}</option>`)
+    + agentNames.map((n) => `<option value="${esc(n)}" ${n === cur ? "selected" : ""}>${esc(n)}</option>`).join("");
+  const agentOptions = agentOptionsFor(d.agentName || "", "— No agent name —");
+  const agent2Options = agentOptionsFor(d.agentName2 || "", "— No second agent —");
   return `<div class="modal-backdrop"><div class="modal contract-modal" role="dialog" aria-modal="true" aria-labelledby="contracttitle">
     <div class="modal-head"><h3 id="contracttitle">${f.id ? `Edit ${esc(f.contract_no)}` : "New tenancy contract draft"}</h3><button class="modal-close" id="contractclose" aria-label="Close">×</button></div>
     <div class="modal-body"><div class="contract-form-section"><h4>Deal and contract</h4><div class="form-grid">
       <div class="field"><label for="ct_agent">Agent name</label><select class="input" id="ct_agent">${agentOptions}</select></div>
+      <div class="field"><label for="ct_agent2">Agent 2 (optional)</label><select class="input" id="ct_agent2">${agent2Options}</select></div>
       ${contractInput("ct_contract_date","Contract date",f.contract_date,"date")}${contractInput("ct_start","Start date",f.start_date,"date")}${contractInput("ct_end","End date",f.end_date,"date")}
       ${contractInput("ct_landlord","Landlord / owner",f.landlord_name)}${contractInput("ct_tenant","Tenant",f.tenant_name)}${contractInput("ct_owner_phone","Owner phone",f.owner_phone,"tel")}${contractInput("ct_tenant_phone","Tenant phone",f.tenant_phone,"tel")}
       ${contractInput("ct_rent","Annual rent (AED)",f.annual_rent,"number",'min="0" step="0.01"')}${contractInput("ct_contract_value","Total contract value (AED)",d.contractValue ?? f.annual_rent,"number",'min="0" step="0.01"')}${contractInput("ct_deposit","Security deposit (AED)",f.security_deposit,"number",'min="0" step="0.01"')}${contractInput("ct_payment","Payment mode",f.payment_mode)}
@@ -925,7 +929,7 @@ async function saveContract(status) {
     p_contract_date: value("ct_contract_date"), p_start_date: value("ct_start"), p_end_date: value("ct_end"),
     p_landlord_name: value("ct_landlord"), p_tenant_name: value("ct_tenant"), p_owner_phone: value("ct_owner_phone"), p_tenant_phone: value("ct_tenant_phone"),
     p_annual_rent: Number(value("ct_rent")), p_security_deposit: Number(value("ct_deposit")), p_payment_mode: value("ct_payment"), p_additional_terms: value("ct_terms"),
-    p_details: { agentName:value("ct_agent"), lessorName:value("ct_landlord"), lessorEmiratesId:value("ct_lessor_id"), lessorEmail:value("ct_lessor_email"), lessorLicenseNo:value("ct_lessor_license"), lessorLicensingAuthority:value("ct_lessor_authority"), tenantEmiratesId:value("ct_tenant_id"), tenantEmail:value("ct_tenant_email"), tenantLicenseNo:value("ct_tenant_license"), tenantLicensingAuthority:value("ct_tenant_authority"), plotNo:value("ct_plot"), makaniNo:value("ct_makani"), buildingName:value("ct_building"), propertyNo:value("ct_unit"), propertyType:value("ct_property_type"), contractValue:value("ct_contract_value"), unitType:value("ct_unit_type"), propertyArea:value("ct_area_sqm"), location:value("ct_location"), premisesNo:value("ct_premises_no") },
+    p_details: { agentName:value("ct_agent"), agentName2:value("ct_agent2"), lessorName:value("ct_landlord"), lessorEmiratesId:value("ct_lessor_id"), lessorEmail:value("ct_lessor_email"), lessorLicenseNo:value("ct_lessor_license"), lessorLicensingAuthority:value("ct_lessor_authority"), tenantEmiratesId:value("ct_tenant_id"), tenantEmail:value("ct_tenant_email"), tenantLicenseNo:value("ct_tenant_license"), tenantLicensingAuthority:value("ct_tenant_authority"), plotNo:value("ct_plot"), makaniNo:value("ct_makani"), buildingName:value("ct_building"), propertyNo:value("ct_unit"), propertyType:value("ct_property_type"), contractValue:value("ct_contract_value"), unitType:value("ct_unit_type"), propertyArea:value("ct_area_sqm"), location:value("ct_location"), premisesNo:value("ct_premises_no") },
     p_addendum: { furnishing:value("ct_furnishing"), premises:value("ct_add_premises"), unitNo:value("ct_add_unit"), building:value("ct_add_building"), area:value("ct_add_area"), city:value("ct_add_city"), customTerms:value("ct_add_terms"), removedClauses: ADDENDUM_CLAUSES.filter((c) => document.getElementById("ax_" + c.key) && !document.getElementById("ax_" + c.key).checked).map((c) => c.key) },
   };
   if (!payload.p_contract_date || !payload.p_start_date || !payload.p_end_date || !payload.p_landlord_name || !payload.p_tenant_name || !Number.isFinite(payload.p_annual_rent) || payload.p_annual_rent < 0 || !Number.isFinite(payload.p_security_deposit) || payload.p_security_deposit < 0) { msg.textContent = "Valid dates, parties, and non-negative amounts are required."; return; }
