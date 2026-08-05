@@ -433,12 +433,12 @@ function renderApp() {
   const nav = `
   <nav class="nav">
     <div class="nav-brand"><img src="./xsite-logo.png" alt="Xsite"></div>
-    ${roleIn("owner", "accounts", "admin", "manager") ? navLink("dashboard", "Dashboard") : ""}
+    ${roleIn("owner", "accounts", "admin") ? navLink("dashboard", "Dashboard") : ""}
     ${roleIn("owner") ? navLink("activity", "Team Activity") : ""}
-    ${roleIn("owner", "admin", "manager") ? navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts") : ""}
+    ${roleIn("owner", "accounts", "admin", "manager") ? navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts") : ""}
     ${roleIn("owner", "admin", "manager") ? navLink("contacts", "Contacts") : ""}
-    ${roleIn("owner", "accounts") ? navLink("transactions", "Transactions") : ""}
-    ${roleIn("owner", "accounts", "agent") ? navLink("ledgers", roleIn("agent") ? "My Ledger" : "Agent Ledgers") : ""}
+    ${roleIn("owner", "accounts") ? navLink("transactions", "Transactions") : roleIn("manager") ? navLink("invoices", "Accounts") : ""}
+    ${roleIn("owner", "accounts", "agent", "manager") ? navLink("ledgers", roleIn("agent") ? "My Ledger" : "Agent Ledgers") : ""}
     ${roleIn("owner", "admin", "manager", "agent") ? navLink("submissions", newSubs ? `Submissions (${newSubs})` : "Submissions") : ""}
     ${roleIn("pending") ? "" : navLink("requests", pendingRequests ? `Requests (${pendingRequests})` : "Requests")}
     ${roleIn("owner", "admin", "manager") ? navLink("staff", "Staff") : ""}
@@ -455,14 +455,17 @@ function renderApp() {
   else if (roleIn("pending")) body = viewPending();
   else if (state.screen === "activity" && roleIn("owner")) body = viewTeamActivity();
   else if (state.screen === "contacts" && roleIn("owner", "admin", "manager")) body = viewContacts();
-  else if (["transactions", "invoices", "commission", "cashbank"].includes(state.screen) && roleIn("owner", "accounts")) body = viewAccountsHub();
-  else if (state.screen === "contracts" && roleIn("owner", "admin", "manager")) body = viewContracts();
-  else if (state.screen === "ledgers" && roleIn("owner", "accounts", "agent")) body = viewLedgers();
+  else if (["transactions", "invoices", "commission"].includes(state.screen) && roleIn("owner", "accounts", "manager")) body = viewAccountsHub();
+  else if (state.screen === "cashbank" && roleIn("owner", "accounts")) body = viewAccountsHub();
+  else if (state.screen === "contracts" && roleIn("owner", "accounts", "admin", "manager")) body = viewContracts();
+  else if (state.screen === "ledgers" && roleIn("owner", "accounts", "agent", "manager")) body = viewLedgers();
   else if (state.screen === "submissions" && roleIn("owner", "admin", "manager", "agent")) body = viewSubmissions();
   else if (state.screen === "requests") body = viewRequests();
   else if (state.screen === "staff" && roleIn("owner", "admin", "manager")) body = viewStaff();
   else if (state.screen === "team" && showTeam) body = viewTeam();
+  else if (state.screen === "dashboard" && roleIn("owner", "accounts", "admin")) body = viewDashboard();
   else if (roleIn("agent")) body = viewLedgers();
+  else if (roleIn("manager")) body = viewContracts();
   else body = viewDashboard();
   root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewReceiptPrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail() + viewCeModal() + viewStaffModal() + viewEjariHelp() + viewLedgerStatement() + viewKycModal();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
@@ -809,6 +812,7 @@ function openContractForm(contract = null) {
 function contractHandoffSection() {
   if (!roleIn("owner", "accounts", "admin", "manager") || !state.accountTasks.length) return "";
   const canFulfill = roleIn("owner", "accounts");
+  const showMoney = roleIn("owner", "accounts", "manager"); // rent/deposit hidden from admin only
   // Only contracts still awaiting a receipt/invoice belong here — once Accounts
   // has issued the document the task is done and drops off this list.
   const openTasks = state.accountTasks.filter((t) => t.status === "pending");
@@ -826,14 +830,14 @@ function contractHandoffSection() {
     return `<tr><td><strong>${esc(contract.contract_no)}</strong><div class="text-muted" style="font-size:11px">${showDate(contract.start_date)} – ${showDate(contract.end_date)}</div></td>
       <td>${esc(contract.tenant_name)}<div class="text-muted" style="font-size:11px">${esc(contract.tenant_phone || "")}</div></td>
       <td>${esc(contract.landlord_name || "—")}<div class="text-muted" style="font-size:11px">${esc(contract.owner_phone || "")}</div></td>
-      ${canFulfill ? `<td class="numeric">${money(contract.annual_rent)}</td>
+      ${showMoney ? `<td class="numeric">${money(contract.annual_rent)}</td>
       <td class="numeric">${money(contract.security_deposit)}</td>` : ""}
       <td>${esc(contract.payment_mode || "—")}</td>
       <td><button class="btn btn-secondary btn-mini" data-files="${contract.id}">Files${fileCount(contract.id) ? ` (${fileCount(contract.id)})` : ""}</button></td>
       <td><span class="tag ${task.status === "pending" ? "tag-accent" : "tag-neutral"}">${esc(task.status)}</span></td><td>${action}</td></tr>`;
   }).join("");
   return `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Contracts awaiting Accounts</h3><span class="tag ${pending ? "tag-accent" : "tag-neutral"}">${pending} pending</span></div>
-    ${pending ? `<div class="table-wrap"><table class="grid" style="min-width:1100px"><thead><tr><th>Contract</th><th>Tenant</th><th>Landlord / owner</th>${canFulfill ? `<th>Annual rent</th><th>Deposit</th>` : ""}<th>Payment mode</th><th>Documents</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div>` : `<div class="md-empty" style="border:0">All caught up — every finalized contract has its invoice or receipt.</div>`}</section>`;
+    ${pending ? `<div class="table-wrap"><table class="grid" style="min-width:1100px"><thead><tr><th>Contract</th><th>Tenant</th><th>Landlord / owner</th>${showMoney ? `<th>Annual rent</th><th>Deposit</th>` : ""}<th>Payment mode</th><th>Documents</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div>` : `<div class="md-empty" style="border:0">All caught up — every finalized contract has its invoice or receipt.</div>`}</section>`;
 }
 
 function viewContracts() {
@@ -1275,12 +1279,18 @@ function viewAgentDashboard() {
 // ── accounts hub: register + money screens as one section with tabs ──
 const ACC_TABS = [["master", "Master Sheet"], ["invoices", "Invoices & Receipts"], ["commission", "Commission Entry"], ["cashbank", "Cash & Bank"]];
 function viewAccountsHub() {
+  // Manager sees only the money-detail tabs (Invoices, Commission). The Master Sheet
+  // register and Cash & Bank ("cash in hand") stay owner/accounts only.
+  const canAccounts = roleIn("owner", "accounts");
+  const visibleTabs = ACC_TABS.filter(([k]) => canAccounts || (k !== "master" && k !== "cashbank"));
   // Old deep links (screen names) map onto the tab bar.
   if (state.screen !== "transactions") {
     state.accTab = state.screen === "invoices" ? "invoices" : state.screen === "commission" ? "commission" : "cashbank";
     state.screen = "transactions";
   }
-  const tabs = ACC_TABS.map(([k, l]) => `<button class="tab ${state.accTab === k ? "is-active" : ""}" data-acctab="${k}">${l}</button>`).join("");
+  // Clamp to a tab this role may actually open (default to the first visible one).
+  if (!visibleTabs.some(([k]) => k === state.accTab)) state.accTab = visibleTabs[0][0];
+  const tabs = visibleTabs.map(([k, l]) => `<button class="tab ${state.accTab === k ? "is-active" : ""}" data-acctab="${k}">${l}</button>`).join("");
   const body = state.accTab === "invoices" ? viewInvoices()
     : state.accTab === "commission" ? viewCommissionEntry()
     : state.accTab === "cashbank" ? viewCashBank()
