@@ -446,7 +446,7 @@ function renderApp() {
     ${roleIn("owner", "accounts", "admin", "manager") ? navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts") : ""}
     ${roleIn("owner", "admin", "manager") ? navLink("contacts", "Contacts") : ""}
     ${roleIn("owner", "admin") ? navLink("listings", "Listings") : ""}
-    ${roleIn("owner", "accounts") ? navLink("transactions", "Transactions") : roleIn("manager") ? navLink("invoices", "Accounts") : ""}
+    ${roleIn("owner", "accounts") ? navLink("transactions", pendingAccountTasks ? `Transactions (${pendingAccountTasks})` : "Transactions") : roleIn("manager") ? navLink("invoices", "Accounts") : ""}
     ${roleIn("owner", "accounts", "agent", "manager") ? navLink("ledgers", roleIn("agent") ? "My Ledger" : "Agent Ledgers") : ""}
     ${roleIn("owner", "admin", "manager", "agent") ? navLink("submissions", newSubs ? `Submissions (${newSubs})` : "Submissions") : ""}
     ${roleIn("pending") ? "" : navLink("requests", pendingRequests ? `Requests (${pendingRequests})` : "Requests")}
@@ -831,12 +831,17 @@ function contractHandoffSection() {
     const contract = state.contracts.find((c) => c.id === task.contract_id);
     if (!contract) return "";
     const doc = state.docs.find((d) => d.id === task.money_doc_id);
+    const agent = contract.details?.agentName || contract.details?.agentName2 || "";
     const action = task.status === "pending" && canFulfill ? `<div data-accounttask="${task.id}" style="display:flex;gap:6px;flex-wrap:wrap;align-items:end">
       <label class="field compact-field">Type<select class="input" data-tasktype><option value="invoice">Invoice</option><option value="receipt">Receipt</option></select></label>
       <label class="field compact-field">Date<input class="input" type="date" data-taskdate value="${todayIso()}"></label>
+      <label class="field compact-field">Agent<input class="input" data-taskagent list="moneydocagents" value="${esc(agent)}" placeholder="Type agent name"></label>
       <label class="field compact-field">Amount<input class="input" type="number" min="0.01" step="0.01" data-taskamount value="${esc(contract.details?.contractValue || contract.annual_rent)}"></label>
-      <label class="field compact-field">Payment<input class="input" data-taskpayment value="${esc(contract.payment_mode || "")}" placeholder="Cheque / transfer"></label>
-      <button class="btn btn-primary btn-mini" data-fulfilltask>Create</button></div>` : `<span class="tag tag-neutral">${doc ? esc(doc.doc_no) : "Completed"}</span>`;
+      <label class="field compact-field">Payment<select class="input" data-taskpayment>${paymentMethodOptions(contract.payment_mode || "")}</select></label>
+      <label class="field compact-field" data-taskchequefield>Cheque no.<input class="input" data-taskchequenumber placeholder="Cheque number"></label>
+      <label class="field compact-field" data-taskchequefield>Cheque bank<input class="input" data-taskchequebank value="${esc(contract.details?.chequeBank || "")}" placeholder="Bank"></label>
+      <label class="field compact-field" data-taskchequefield>Cheque date<input class="input" type="date" data-taskchequedate></label>
+      <button class="btn btn-primary btn-mini" data-fulfilltask>Create draft</button></div>` : `<span class="tag tag-neutral">${doc ? esc(doc.doc_no) : "Completed"}</span>`;
     return `<tr><td><strong>${esc(contract.contract_no)}</strong><div class="text-muted" style="font-size:11px">${showDate(contract.start_date)} – ${showDate(contract.end_date)}</div></td>
       <td>${esc(contract.tenant_name)}<div class="text-muted" style="font-size:11px">${esc(contract.tenant_phone || "")}</div></td>
       <td>${esc(contract.landlord_name || "—")}<div class="text-muted" style="font-size:11px">${esc(contract.owner_phone || "")}</div></td>
@@ -846,7 +851,7 @@ function contractHandoffSection() {
       <td><button class="btn btn-secondary btn-mini" data-files="${contract.id}">Files${fileCount(contract.id) ? ` (${fileCount(contract.id)})` : ""}</button></td>
       <td><span class="tag ${task.status === "pending" ? "tag-accent" : "tag-neutral"}">${esc(task.status)}</span></td><td>${action}</td></tr>`;
   }).join("");
-  return `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Contracts awaiting Accounts</h3><span class="tag ${pending ? "tag-accent" : "tag-neutral"}">${pending} pending</span></div>
+  return `<section class="md-section" style="margin-bottom:20px"><datalist id="moneydocagents">${allLedgerNames().map((name) => `<option value="${esc(name)}">`).join("")}</datalist><div class="md-section-header"><h3>Contracts awaiting Accounts</h3><span class="tag ${pending ? "tag-accent" : "tag-neutral"}">${pending} pending</span></div>
     ${pending ? `<div class="table-wrap"><table class="grid" style="min-width:1100px"><thead><tr><th>Contract</th><th>Tenant</th><th>Landlord / owner</th>${showMoney ? `<th>Annual rent</th><th>Deposit</th>` : ""}<th>Payment mode</th><th>Documents</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div>` : `<div class="md-empty" style="border:0">All caught up — every finalized contract has its invoice or receipt.</div>`}</section>`;
 }
 
@@ -987,14 +992,22 @@ async function saveContract(status) {
 
 async function fulfillAccountTask(container) {
   const button = container.querySelector("[data-fulfilltask]");
+  const type = container.querySelector("[data-tasktype]").value;
   const amount = Number(container.querySelector("[data-taskamount]").value);
   const docDate = container.querySelector("[data-taskdate]").value;
   const paymentMethod = container.querySelector("[data-taskpayment]").value.trim();
+  const agent = container.querySelector("[data-taskagent]").value.trim();
+  const chequeNumber = container.querySelector("[data-taskchequenumber]").value.trim();
+  const chequeBank = container.querySelector("[data-taskchequebank]").value.trim();
+  const chequeDate = container.querySelector("[data-taskchequedate]").value;
   if (!docDate || !Number.isFinite(amount) || amount <= 0 || !paymentMethod) { window.alert("Date, a positive amount, and payment method are required."); return; }
+  if (!agent) { window.alert("Enter the agent name for this document."); return; }
+  if (type === "receipt" && paymentMethod === "Cheque" && (!chequeNumber || !chequeBank || !chequeDate)) { window.alert("Cheque number, bank, and cheque date are required for a cheque receipt."); return; }
   button.disabled = true; button.textContent = "Creating…";
-  const result = await supabase.rpc("fulfill_account_task", { p_task_id: container.dataset.accounttask, p_doc_type: container.querySelector("[data-tasktype]").value,
-    p_doc_date: docDate, p_amount: amount, p_payment_method: paymentMethod });
-  if (result.error) { window.alert("Could not create document: " + result.error.message); button.disabled=false; button.textContent="Create"; return; }
+  const result = await supabase.rpc("fulfill_account_task", { p_task_id: container.dataset.accounttask, p_doc_type: type,
+    p_doc_date: docDate, p_amount: amount, p_payment_method: paymentMethod, p_status: "draft",
+    p_details: { agent, cheque_number: chequeNumber, cheque_bank: chequeBank, cheque_date: chequeDate } });
+  if (result.error) { window.alert("Could not create document: " + result.error.message); button.disabled=false; button.textContent="Create draft"; return; }
   await reloadAfterWrite(reloadContracts, "Invoice or receipt"); render();
 }
 
@@ -1300,7 +1313,11 @@ function viewAccountsHub() {
   }
   // Clamp to a tab this role may actually open (default to the first visible one).
   if (!visibleTabs.some(([k]) => k === state.accTab)) state.accTab = visibleTabs[0][0];
-  const tabs = visibleTabs.map(([k, l]) => `<button class="tab ${state.accTab === k ? "is-active" : ""}" data-acctab="${k}">${l}</button>`).join("");
+  const pendingContractDocs = state.accountTasks.filter((task) => task.status === "pending").length;
+  const tabs = visibleTabs.map(([k, l]) => {
+    const label = k === "invoices" && pendingContractDocs ? `${l} (${pendingContractDocs})` : l;
+    return `<button class="tab ${state.accTab === k ? "is-active" : ""}" data-acctab="${k}">${label}</button>`;
+  }).join("");
   const body = state.accTab === "invoices" ? viewInvoices()
     : state.accTab === "commission" ? viewCommissionEntry()
     : state.accTab === "cashbank" ? viewCashBank()
@@ -1313,7 +1330,7 @@ function viewTransactions() {
   const tiers = expiryTiers();
   const hasExp = tiers.some((t) => t.items.length);
   const q = state.txQuery.trim().toLowerCase();
-  const canAdd = roleIn("owner", "accounts", "admin", "manager");
+  const canAdd = roleIn("owner", "accounts");
   const canEdit = roleIn("owner", "accounts");
   const months = availableMonths(state.deals, "month");
   const monthTabs = months.map((m) =>
@@ -1584,6 +1601,14 @@ function dealLabelFor(group) {
   const opt = dealGroupOptions().find((o) => o.group === group);
   return opt ? opt.label : "—";
 }
+const PAYMENT_METHODS = ["Cash", "Bank transfer", "Cheque", "Card", "Other"];
+function paymentMethodOptions(current = "") {
+  const value = String(current || "").trim();
+  const known = PAYMENT_METHODS.includes(value);
+  return `<option value="">— Select —</option>`
+    + (!value || known ? "" : `<option value="${esc(value)}" selected>${esc(value)}</option>`)
+    + PAYMENT_METHODS.map((method) => `<option value="${esc(method)}" ${method === value ? "selected" : ""}>${esc(method)}</option>`).join("");
+}
 function viewInvoices() {
   const canEdit = roleIn("owner", "accounts");
   const months = [...new Set([...availableMonths(state.docs, "month"), ...availableMonths(state.deals, "month")])].sort().reverse();
@@ -1595,19 +1620,20 @@ function viewInvoices() {
   const rows = state.docs.filter((d) =>
     (!state.invMonth || d.month === state.invMonth) &&
     (state.invType === "All" || (state.invType === "Invoices" ? d.doc_type === "invoice" : d.doc_type === "receipt")) &&
-    (!q || [d.doc_no, d.client, d.description, d.payment_method, dealLabelFor(d.deal_group)].join(" ").toLowerCase().includes(q)));
+    (!q || [d.doc_no, d.client, d.description, d.payment_method, d.details?.agent, d.details?.cheque_number, dealLabelFor(d.deal_group)].join(" ").toLowerCase().includes(q)));
   const monthDocs = state.docs.filter((d) => d.month === state.invMonth);
   const sumWhere = (fn) => monthDocs.filter(fn).reduce((s, d) => s + (+d.amount || 0), 0);
-  const received = sumWhere((d) => d.doc_type === "receipt");
-  const invoiced = sumWhere((d) => d.doc_type === "invoice");
+  const received = sumWhere((d) => d.doc_type === "receipt" && d.status !== "draft");
+  const invoiced = sumWhere((d) => d.doc_type === "invoice" && d.status !== "draft");
   const pending = sumWhere((d) => d.doc_type === "invoice" && d.status === "pending");
-  const statusTag = (d) => d.status === "pending" ? `<span class="tag tag-accent">pending</span>`
+  const statusTag = (d) => d.status === "draft" ? `<span class="tag tag-accent">draft</span>`
+    : d.status === "pending" ? `<span class="tag tag-accent">pending</span>`
     : `<span class="tag tag-neutral">${esc(d.status)}</span>`;
   const body = rows.map((d) => `<tr>
     <td>${esc(d.doc_no)}</td><td>${esc(showDate(d.doc_date))}</td>
     <td>${d.doc_type === "invoice" ? "Invoice" : "Receipt"}</td>
     <td>${esc(dealLabelFor(d.deal_group))}</td>
-    <td>${esc(d.client || "—")}</td><td>${esc(d.description || "—")}</td>
+    <td>${esc(d.client || "—")}</td><td>${esc(d.details?.agent || "—")}</td><td>${esc(d.description || "—")}</td>
     <td class="numeric">${money(d.amount)}</td>
     <td>${statusTag(d)}</td><td>${esc(d.payment_method || "—")}</td>
     ${canEdit ? `<td><div class="row-actions">
@@ -1620,16 +1646,16 @@ function viewInvoices() {
   return `
   <div>
     <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
-      <div><span class="card-kicker">Accounts / Money</span><h1 style="margin-top:4px">Invoices &amp; Receipts</h1><p class="text-muted" style="margin:0">Every document links to a register deal — ${monthLabel(state.invMonth)}.</p></div>
+      <div><span class="card-kicker">Accounts / Money</span><h1 style="margin-top:4px">Invoices &amp; Receipts</h1><p class="text-muted" style="margin:0">Draft, issue, and track documents with optional deal links — ${monthLabel(state.invMonth)}.</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-secondary" id="exportdocs">Export CSV</button>
-        <button class="btn btn-primary" id="newdoc">+ New receipt / invoice</button>
+        ${canEdit ? `<button class="btn btn-primary" id="newdoc">+ New receipt / invoice</button>` : ""}
       </div>
     </div>
     ${contractHandoffSection()}
     <section class="md-kpi-grid" style="grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:20px">
-      <div class="md-kpi is-accent"><span class="card-kicker">Receipts — ${monthLabel(state.invMonth)}</span><span class="md-kpi-value">${money(Math.round(received))}</span><span class="md-kpi-detail">${monthDocs.filter((d)=>d.doc_type==="receipt").length} receipts recorded</span></div>
-      <div class="md-kpi"><span class="card-kicker">Invoiced</span><span class="md-kpi-value">${money(Math.round(invoiced))}</span><span class="md-kpi-detail">${monthDocs.filter((d)=>d.doc_type==="invoice").length} invoices raised</span></div>
+      <div class="md-kpi is-accent"><span class="card-kicker">Receipts — ${monthLabel(state.invMonth)}</span><span class="md-kpi-value">${money(Math.round(received))}</span><span class="md-kpi-detail">${monthDocs.filter((d)=>d.doc_type==="receipt"&&d.status!=="draft").length} issued · ${monthDocs.filter((d)=>d.doc_type==="receipt"&&d.status==="draft").length} draft</span></div>
+      <div class="md-kpi"><span class="card-kicker">Invoiced</span><span class="md-kpi-value">${money(Math.round(invoiced))}</span><span class="md-kpi-detail">${monthDocs.filter((d)=>d.doc_type==="invoice"&&d.status!=="draft").length} issued · ${monthDocs.filter((d)=>d.doc_type==="invoice"&&d.status==="draft").length} draft</span></div>
       <div class="md-kpi"><span class="card-kicker">Pending invoices</span><span class="md-kpi-value">${money(Math.round(pending))}</span><span class="md-kpi-detail">${monthDocs.filter((d)=>d.doc_type==="invoice"&&d.status==="pending").length} awaiting payment</span></div>
     </section>
     <div class="tx-toolbar">
@@ -1641,8 +1667,8 @@ function viewInvoices() {
     <div class="sheet">
       <div class="sheet-hint">Documents — newest number first</div>
       <div class="table-wrap"><table class="grid" style="min-width:1100px">
-        <thead><tr><th>Doc no</th><th>Date</th><th>Type</th><th>Deal</th><th>Client</th><th>Description</th><th>Amount</th><th>Status</th><th>Payment</th>${canEdit ? "<th></th>" : ""}</tr></thead>
-        <tbody>${body || `<tr><td colspan="10"><div class="md-empty" style="border:0">No documents in ${monthLabel(state.invMonth)} yet.</div></td></tr>`}</tbody>
+        <thead><tr><th>Doc no</th><th>Date</th><th>Type</th><th>Deal</th><th>Client</th><th>Agent</th><th>Description</th><th>Amount</th><th>Status</th><th>Payment</th>${canEdit ? "<th></th>" : ""}</tr></thead>
+        <tbody>${body || `<tr><td colspan="11"><div class="md-empty" style="border:0">No documents in ${monthLabel(state.invMonth)} yet.</div></td></tr>`}</tbody>
       </table></div>
     </div>
   </div>`;
@@ -1651,23 +1677,28 @@ function viewInvoices() {
 // ── doc modal ────────────────────────────────────────────
 function emptyDocForm() {
   return { id: null, doc_type: "receipt", dealLabel: "", client: "", description: "",
-    amount: "", doc_date: todayIso(), payment_method: "", msg: "" };
+    amount: "", doc_date: todayIso(), payment_method: "", payment_reference: "", agent: "", stage: "draft",
+    cheque_number: "", cheque_bank: "", cheque_date: "", cheque_drawer: "", msg: "" };
 }
 function docFormFromRow(d) {
   // If the linked deal no longer exists in the register, present a blank field
   // (so editing isn't blocked) but remember the original link and keep it
   // unless the user picks a different deal.
   const resolved = d.deal_group ? dealGroupOptions().find((o) => o.group === d.deal_group) : null;
+  const details = d.details || {};
   return { id: d.id, doc_type: d.doc_type, dealLabel: resolved ? resolved.label : "",
     deal_group: d.deal_group || null, keepGroup: !!d.deal_group && !resolved,
     client: d.client || "", description: d.description || "", amount: d.amount ?? "",
-    doc_date: d.doc_date || "", payment_method: d.payment_method || "", msg: "", status: d.status };
+    doc_date: d.doc_date || "", payment_method: d.payment_method || "", payment_reference: details.payment_reference || "", agent: details.agent || resolved?.deal?.agent || "",
+    stage: d.status === "draft" ? "draft" : "issued", cheque_number: details.cheque_number || "",
+    cheque_bank: details.cheque_bank || "", cheque_date: details.cheque_date || "", cheque_drawer: details.cheque_drawer || "",
+    msg: "", status: d.status };
 }
 function viewDocModal() {
   const f = state.docForm;
   if (!f) return "";
   const opts = dealGroupOptions();
-  const dl = `<datalist id="deallist">${opts.map((o) => `<option value="${esc(o.label)}">`).join("")}</datalist>`;
+  const dl = `<datalist id="deallist">${opts.map((o) => `<option value="${esc(o.label)}">`).join("")}</datalist><datalist id="docagentlist">${allLedgerNames().map((name) => `<option value="${esc(name)}">`).join("")}</datalist>`;
   return `
   <div class="modal-backdrop">
     <div class="modal" style="width:min(640px,100%)" role="dialog" aria-labelledby="doctitle">
@@ -1680,13 +1711,23 @@ function viewDocModal() {
               <option value="invoice" ${f.doc_type === "invoice" ? "selected" : ""}>Invoice — payment requested</option>
             </select></div>
           <div class="field"><label for="d_date">Date</label><input class="input" id="d_date" type="date" value="${esc(f.doc_date)}"></div>
+          <div class="field"><label for="d_stage">Stage</label><select class="input" id="d_stage"><option value="draft" ${f.stage === "draft" ? "selected" : ""}>Draft</option><option value="issued" ${f.stage === "issued" ? "selected" : ""}>Issued / posted</option></select></div>
           <div class="field" style="grid-column:1/-1"><label for="d_deal">Deal (optional — type to search the register)</label>
             <input class="input" id="d_deal" list="deallist" value="${esc(f.dealLabel)}" placeholder="e.g. 47 · 208 Herad Tower — Saheer Salim"></div>
+          <div class="field"><label for="d_agent">Agent name</label><input class="input" id="d_agent" list="docagentlist" value="${esc(f.agent)}" placeholder="Select or type manually"></div>
           <div class="field"><label for="d_client">Client</label><input class="input" id="d_client" value="${esc(f.client)}"></div>
           <div class="field"><label for="d_amount">Amount (AED)</label><input class="input" id="d_amount" type="number" value="${esc(f.amount)}"></div>
           <div class="field" style="grid-column:1/-1"><label for="d_desc">Description</label><input class="input" id="d_desc" value="${esc(f.description)}"></div>
-          <div class="field" style="grid-column:1/-1"><label for="d_pay">Payment method / reference</label><input class="input" id="d_pay" value="${esc(f.payment_method)}"></div>
-          <div class="form-note">Picking a deal pre-fills client, description, and amount — edit freely. Receipts save as received; invoices start pending.</div>
+          <div class="field" style="grid-column:1/-1"><label for="d_pay">Payment method</label><select class="input" id="d_pay">${paymentMethodOptions(f.payment_method)}</select></div>
+          <div class="field" style="grid-column:1/-1"><label for="d_payment_reference">Payment reference / remarks</label><input class="input" id="d_payment_reference" value="${esc(f.payment_reference)}" placeholder="Transfer reference, cash note, or other payment remarks"></div>
+          <div id="docchequefields" class="form-grid" style="grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr))">
+            <div class="form-section" style="grid-column:1/-1">Cheque details</div>
+            <div class="field"><label for="d_cheque_number">Cheque number</label><input class="input" id="d_cheque_number" value="${esc(f.cheque_number)}"></div>
+            <div class="field"><label for="d_cheque_bank">Bank</label><input class="input" id="d_cheque_bank" value="${esc(f.cheque_bank)}"></div>
+            <div class="field"><label for="d_cheque_date">Cheque date</label><input class="input" id="d_cheque_date" type="date" value="${esc(f.cheque_date)}"></div>
+            <div class="field"><label for="d_cheque_drawer">Drawer / account name</label><input class="input" id="d_cheque_drawer" value="${esc(f.cheque_drawer)}"></div>
+          </div>
+          <div class="form-note">Picking a deal pre-fills client, agent, description, amount, bank, and known cheque information. Save as Draft until the document is ready to issue.</div>
         </div>
         <div class="modal-actions">
           <span class="form-msg" id="docmsg">${esc(f.msg)}</span>
@@ -1704,8 +1745,11 @@ function docPrefill() {
   const d = opt.deal;
   const setIfEmpty = (id, v) => { const el = document.getElementById(id); if (el && !el.value) el.value = v ?? ""; };
   setIfEmpty("d_client", d.tenant || d.landlord || "");
+  setIfEmpty("d_agent", d.agent || "");
   setIfEmpty("d_desc", `Commission — ${d.unit || ""} ${d.building || ""}`.trim());
   setIfEmpty("d_amount", d.commission_received ?? "");
+  setIfEmpty("d_cheque_bank", d.bank || "");
+  setIfEmpty("d_cheque_number", d.cheque_details || "");
 }
 async function saveDoc() {
   const f = state.docForm;
@@ -1716,13 +1760,21 @@ async function saveDoc() {
   if (label && !opt) { msgEl.textContent = "Pick a deal from the register list, or leave it blank."; return; }
   if (!g("d_amount") || !g("d_date")) { msgEl.textContent = "Date and amount are required."; return; }
   const type = g("d_type");
+  const agent = g("d_agent").trim();
+  const paymentMethod = g("d_pay").trim();
+  if (!agent) { msgEl.textContent = "Agent name is required; select a ledger name or type it manually."; return; }
+  if (type === "receipt" && g("d_stage") === "issued" && paymentMethod === "Cheque" && (!g("d_cheque_number").trim() || !g("d_cheque_bank").trim() || !g("d_cheque_date"))) { msgEl.textContent = "Cheque number, bank, and cheque date are required before issuing a cheque receipt."; return; }
+  const details = { ...(f.id ? (state.docs.find((d) => d.id === f.id)?.details || {}) : {}), agent,
+    payment_reference: g("d_payment_reference").trim(),
+    cheque_number: g("d_cheque_number").trim(), cheque_bank: g("d_cheque_bank").trim(),
+    cheque_date: g("d_cheque_date"), cheque_drawer: g("d_cheque_drawer").trim() };
   const btn = document.getElementById("docsave"); btn.disabled = true; btn.textContent = "Saving…";
   const rec = {
     doc_type: type, deal_group: opt ? opt.group : (!label && f.keepGroup ? f.deal_group : null), client: g("d_client") || null,
     description: g("d_desc") || null, amount: parseFloat(g("d_amount")),
     doc_date: g("d_date"), month: g("d_date").slice(0, 7),
-    payment_method: g("d_pay") || null,
-    status: type === "receipt" ? "received" : (f.status === "paid" ? "paid" : "pending"),
+    payment_method: paymentMethod || null, details,
+    status: g("d_stage") === "draft" ? "draft" : (type === "receipt" ? "received" : (f.status === "paid" ? "paid" : "pending")),
   };
   let error;
   if (f.id) {
@@ -1737,6 +1789,7 @@ async function saveDoc() {
       p_amount: rec.amount,
       p_payment_method: rec.payment_method,
       p_status: rec.status,
+      p_details: rec.details,
     });
     error = rpc.error;
     // The database function predates optional deals and refuses a blank deal
@@ -1939,16 +1992,16 @@ function viewInvoicePrint() {
   const ta = (id, val) => `<textarea class="inv-in inv-ta" id="iv_${id}" rows="3" ${canEdit ? "" : "readonly"}>${esc(val)}</textarea>`;
   return `<div class="inv-print-shell" role="dialog" aria-modal="true" aria-label="Invoice preview" tabindex="-1">
     <div class="contract-print-toolbar inv-toolbar">
-      <div><strong>Tax Invoice</strong><div>${esc(f.invoice_number)}${f.status !== "paid" ? " · DRAFT" : ""}</div></div>
+      <div><strong>Tax Invoice</strong><div>${esc(f.invoice_number)}${f.status === "draft" ? " · DRAFT" : ""}</div></div>
       <div style="display:flex;align-items:center;gap:12px">
         ${canEdit ? `<label style="display:flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap"><input type="checkbox" id="invsigned" ${f.signed ? "checked" : ""}>Signature &amp; stamp</label>` : ""}
         <button class="btn btn-secondary" id="invclose">Back</button>
-        ${canEdit ? `<button class="btn btn-secondary" id="invsave">Save draft</button>` : ""}
+        ${canEdit ? `<button class="btn btn-secondary" id="invsave">Save document</button>` : ""}
         <button class="btn btn-primary" id="invprint">Print / Save PDF</button>
       </div>
     </div>
     <div class="inv-sheet">
-      ${f.status !== "paid" ? `<div class="inv-watermark">DRAFT</div>` : ""}
+      ${f.status === "draft" ? `<div class="inv-watermark">DRAFT</div>` : ""}
       <div class="inv-head">
         <h1 class="inv-title">TAX INVOICE</h1>
         <img class="inv-logo" src="./xsite-logo.png" alt="Xsite">
@@ -2030,7 +2083,8 @@ async function saveInvoiceDraft() {
   readInvoiceForm();
   const f = state.printInvoice;
   const btn = document.getElementById("invsave"); if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
-  const details = {
+  const existing = state.docs.find((doc) => doc.id === f.id)?.details || {};
+  const details = { ...existing,
     invoice_number: f.invoice_number, invoice_date: f.invoice_date, due_date: f.due_date,
     client_name: f.client_name, client_address: f.client_address, client_trn: f.client_trn,
     reference: f.reference, agent: f.agent, buyer_name: f.buyer_name, description: f.description,
@@ -2040,7 +2094,7 @@ async function saveInvoiceDraft() {
   };
   const amount = details.quantity * details.unit_price;
   const { error } = await supabase.from("money_docs").update({ details, amount, client: f.client_name, doc_date: f.invoice_date }).eq("id", f.id);
-  if (error) { if (btn) { btn.disabled = false; btn.textContent = "Save draft"; } window.alert("Could not save: " + error.message); return; }
+  if (error) { if (btn) { btn.disabled = false; btn.textContent = "Save document"; } window.alert("Could not save: " + error.message); return; }
   await reloadDocs();
   if (btn) { btn.disabled = false; btn.textContent = "Saved ✓"; }
 }
@@ -2055,7 +2109,9 @@ function receiptDraftFor(doc) {
   const refBuilding = [unit, deal.building, deal.area].filter(Boolean).join(", ");
   return {
     id: doc.id,
+    status: doc.status,
     client_name: d.client_name || doc.client || "",
+    agent: d.agent || deal.agent || "",
     payment_date: d.payment_date || doc.doc_date || todayIso(),
     sent_date: d.sent_date || doc.doc_date || todayIso(),
     invoice_date: d.invoice_date || linkedInvoice?.doc_date || doc.doc_date || todayIso(),
@@ -2063,6 +2119,9 @@ function receiptDraftFor(doc) {
     payment_reference: d.payment_reference || (refBuilding ? `Payment - ${refBuilding}` : (doc.description || "Payment")),
     invoice_total: d.invoice_total != null ? d.invoice_total : (doc.amount ?? 0),
     amount_paid: d.amount_paid != null ? d.amount_paid : (doc.amount ?? 0),
+    payment_method: doc.payment_method || "",
+    cheque_number: d.cheque_number || "", cheque_bank: d.cheque_bank || "",
+    cheque_date: d.cheque_date || "", cheque_drawer: d.cheque_drawer || "",
   };
 }
 function openReceiptPrint(id) {
@@ -2082,14 +2141,15 @@ function viewReceiptPrint() {
   const ta = (id, val) => `<textarea class="inv-in inv-ta" id="rc_${id}" rows="3" ${canEdit ? "" : "readonly"}>${esc(val)}</textarea>`;
   return `<div class="inv-print-shell" role="dialog" aria-modal="true" aria-label="Receipt preview" tabindex="-1">
     <div class="contract-print-toolbar inv-toolbar">
-      <div><strong>Receipt</strong><div>${esc(f.invoice_ref || "")}</div></div>
+      <div><strong>Receipt</strong><div>${esc(f.invoice_ref || "")}${f.status === "draft" ? " · DRAFT" : ""}</div></div>
       <div style="display:flex;align-items:center;gap:12px">
         <button class="btn btn-secondary" id="rcclose">Back</button>
-        ${canEdit ? `<button class="btn btn-secondary" id="rcsave">Save draft</button>` : ""}
+        ${canEdit ? `<button class="btn btn-secondary" id="rcsave">Save document</button>` : ""}
         <button class="btn btn-primary" id="rcprint">Print / Save PDF</button>
       </div>
     </div>
     <div class="inv-sheet">
+      ${f.status === "draft" ? `<div class="inv-watermark">DRAFT</div>` : ""}
       <div class="inv-head">
         <h1 class="inv-title">RECEIPT</h1>
         <img class="inv-logo" src="./xsite-logo.png" alt="Xsite">
@@ -2101,6 +2161,7 @@ function viewReceiptPrint() {
         <div class="inv-fields">
           <label class="inv-lbl">Payment Date</label>${inp("payment_date", f.payment_date, 'type="date"')}
           <label class="inv-lbl">Sent Date</label>${inp("sent_date", f.sent_date, 'type="date"')}
+          <label class="inv-lbl">Agent</label>${inp("agent", f.agent)}
         </div>
         <div class="inv-company">
           <strong>${esc(XSITE_CO.name)}</strong>
@@ -2126,6 +2187,13 @@ function viewReceiptPrint() {
           <tr class="rcpt-total"><td></td><td></td><td class="num" style="font-weight:800">Total AED</td><td></td><td class="num" style="font-weight:800" id="rc_total_paid">${num2(paid)}</td><td class="num" style="font-weight:800" id="rc_total_owing">${num2(owing)}</td></tr>
         </tfoot>
       </table>
+      ${f.payment_method === "Cheque" || f.cheque_number || f.cheque_bank || f.cheque_date ? `<div class="inv-bank">
+        <strong>Cheque details</strong>
+        <div>Cheque number: ${inp("cheque_number", f.cheque_number)}</div>
+        <div>Bank: ${inp("cheque_bank", f.cheque_bank)}</div>
+        <div>Cheque date: ${inp("cheque_date", f.cheque_date, 'type="date"')}</div>
+        <div>Drawer / account: ${inp("cheque_drawer", f.cheque_drawer)}</div>
+      </div>` : ""}
       <div class="inv-registered">${esc(XSITE_CO.registered)}</div>
     </div>
   </div>`;
@@ -2143,22 +2211,25 @@ function receiptRecalc() {
 function readReceiptForm() {
   const f = state.printReceipt;
   const g = (id) => document.getElementById("rc_" + id);
-  ["client_name", "payment_date", "sent_date", "invoice_date", "invoice_ref",
-   "payment_reference", "invoice_total", "amount_paid"].forEach((k) => { if (g(k)) f[k] = g(k).value; });
+  ["client_name", "agent", "payment_date", "sent_date", "invoice_date", "invoice_ref",
+   "payment_reference", "invoice_total", "amount_paid", "cheque_number", "cheque_bank", "cheque_date", "cheque_drawer"].forEach((k) => { if (g(k)) f[k] = g(k).value; });
 }
 async function saveReceiptDraft() {
   readReceiptForm();
   const f = state.printReceipt;
   const btn = document.getElementById("rcsave"); if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
-  const details = {
+  const existing = state.docs.find((doc) => doc.id === f.id)?.details || {};
+  const details = { ...existing,
     client_name: f.client_name, payment_date: f.payment_date, sent_date: f.sent_date,
     invoice_date: f.invoice_date, invoice_ref: f.invoice_ref, payment_reference: f.payment_reference,
     invoice_total: Number(f.invoice_total) || 0, amount_paid: Number(f.amount_paid) || 0,
+    agent: f.agent, cheque_number: f.cheque_number, cheque_bank: f.cheque_bank,
+    cheque_date: f.cheque_date, cheque_drawer: f.cheque_drawer,
   };
   const { error } = await supabase.from("money_docs").update({
     details, amount: details.amount_paid, client: f.client_name, doc_date: f.payment_date,
   }).eq("id", f.id);
-  if (error) { if (btn) { btn.disabled = false; btn.textContent = "Save draft"; } window.alert("Could not save: " + error.message); return; }
+  if (error) { if (btn) { btn.disabled = false; btn.textContent = "Save document"; } window.alert("Could not save: " + error.message); return; }
   await reloadDocs();
   if (btn) { btn.disabled = false; btn.textContent = "Saved ✓"; }
 }
@@ -2357,12 +2428,15 @@ function exportDocuments() {
   const rows = state.docs.filter((d) =>
     (!state.invMonth || d.month === state.invMonth) &&
     (state.invType === "All" || (state.invType === "Invoices" ? d.doc_type === "invoice" : d.doc_type === "receipt")) &&
-    (!q || [d.doc_no, d.client, d.description, d.payment_method, dealLabelFor(d.deal_group)].join(" ").toLowerCase().includes(q)))
-    .map((d) => ({ ...d, deal: dealLabelFor(d.deal_group) }));
+    (!q || [d.doc_no, d.client, d.description, d.payment_method, d.details?.agent, d.details?.cheque_number, dealLabelFor(d.deal_group)].join(" ").toLowerCase().includes(q)))
+    .map((d) => ({ ...d, deal: dealLabelFor(d.deal_group), agent: d.details?.agent || "",
+      cheque_number: d.details?.cheque_number || "", cheque_bank: d.details?.cheque_bank || "",
+      cheque_date: d.details?.cheque_date || "", cheque_drawer: d.details?.cheque_drawer || "" }));
   downloadCsv(`xsite-documents-${state.invMonth || "all"}.csv`, rows, [
     ["Document no", "doc_no"], ["Date", "doc_date"], ["Type", "doc_type"], ["Deal", "deal"],
     ["Client", "client"], ["Description", "description"], ["Amount", "amount"], ["Status", "status"],
-    ["Payment", "payment_method"],
+    ["Payment", "payment_method"], ["Agent", "agent"], ["Cheque number", "cheque_number"],
+    ["Cheque bank", "cheque_bank"], ["Cheque date", "cheque_date"], ["Cheque drawer", "cheque_drawer"],
   ]);
 }
 
@@ -3518,6 +3592,7 @@ function makeContractFromSubmission(id) {
 // is for the entries that arrive outside a register deal — corrections,
 // referrals, and payouts Accounts needs to post directly.
 function viewCommissionEntry() {
+  const canEdit = roleIn("owner", "accounts");
   const months = availableMonths(state.commission, "month");
   const monthTabs = months.map((m) => `<button class="tab ${state.ceMonth === m ? "is-active" : ""}" data-cemonth="${m}">${monthLabel(m)}</button>`).join("");
   const q = state.ceQuery.trim().toLowerCase();
@@ -3536,13 +3611,13 @@ function viewCommissionEntry() {
     <td class="numeric">${money(r.vat)}</td>
     <td class="numeric">${money(r.xsite_share)}</td>
     <td class="numeric">${money(r.agent_share)}</td>
-    <td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editce="${r.id}">Edit</button><button class="btn btn-secondary btn-mini" data-delce="${r.id}">Delete</button></div></td>
+    ${canEdit ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editce="${r.id}">Edit</button><button class="btn btn-secondary btn-mini" data-delce="${r.id}">Delete</button></div></td>` : ""}
   </tr>`).join("");
   return `<div>
     <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div><span class="card-kicker">Accounts / Commissions</span><h1 style="margin-top:4px">Commission Entry</h1>
       <p class="text-muted" style="margin:0">Post commission straight to an agent's ledger — ${monthLabel(state.ceMonth)}.</p></div>
-      <button class="btn btn-primary" id="newce">+ New commission entry</button>
+      ${canEdit ? `<button class="btn btn-primary" id="newce">+ New commission entry</button>` : ""}
     </div>
     <section class="md-kpi-grid" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:20px">
       <div class="md-kpi is-accent"><span class="card-kicker">Entries</span><span class="md-kpi-value">${rows.length}</span></div>
@@ -3557,8 +3632,8 @@ function viewCommissionEntry() {
     </div>
     <div class="sheet"><div class="sheet-hint">Entries feed straight into Agent Ledgers</div>
       <div class="table-wrap"><table class="grid" style="min-width:1100px">
-        <thead><tr><th>Date</th><th>Agent</th><th>Type</th><th>Property</th><th>Third party</th><th>Total commission</th><th>Received</th><th>VAT</th><th>Xsite share</th><th>Agent share</th><th></th></tr></thead>
-        <tbody>${body || `<tr><td colspan="11"><div class="md-empty" style="border:0">No commission entries in ${monthLabel(state.ceMonth)}.</div></td></tr>`}</tbody>
+        <thead><tr><th>Date</th><th>Agent</th><th>Type</th><th>Property</th><th>Third party</th><th>Total commission</th><th>Received</th><th>VAT</th><th>Xsite share</th><th>Agent share</th>${canEdit ? "<th></th>" : ""}</tr></thead>
+        <tbody>${body || `<tr><td colspan="${canEdit ? 11 : 10}"><div class="md-empty" style="border:0">No commission entries in ${monthLabel(state.ceMonth)}.</div></td></tr>`}</tbody>
       </table></div>
     </div>
   </div>`;
@@ -3868,6 +3943,7 @@ function wireScreen() {
     ["invoice_total", "amount_paid"].forEach((id) => {
       const el = document.getElementById("rc_" + id); if (el) el.oninput = receiptRecalc;
     });
+    document.querySelectorAll(".inv-in").forEach((el) => { if (el.oninput === null || !el.oninput) el.addEventListener("input", () => { const s = document.getElementById("rcsave"); if (s) s.textContent = "Save document"; }); });
   }
   if (state.printInvoice) {
     document.getElementById("invclose").onclick = () => { state.printInvoice = null; render(); };
@@ -3878,7 +3954,7 @@ function wireScreen() {
     ["quantity", "unit_price", "vat_rate"].forEach((id) => {
       const el = document.getElementById("iv_" + id); if (el) el.oninput = invoiceRecalc;
     });
-    document.querySelectorAll(".inv-in").forEach((el) => { if (el.oninput === null || !el.oninput) el.addEventListener("input", () => { const s = document.getElementById("invsave"); if (s) s.textContent = "Save draft"; }); });
+    document.querySelectorAll(".inv-in").forEach((el) => { if (el.oninput === null || !el.oninput) el.addEventListener("input", () => { const s = document.getElementById("invsave"); if (s) s.textContent = "Save document"; }); });
   }
   const exportLedgerButton = document.getElementById("exportledger"); if (exportLedgerButton) exportLedgerButton.onclick = exportLedger;
   const printLedger = document.getElementById("printledger"); if (printLedger) printLedger.onclick = () => { state.printLedger = true; render(); };
@@ -3891,6 +3967,15 @@ function wireScreen() {
   root.querySelectorAll("[data-delcontract]").forEach((b) => b.onclick = () => deleteContract(b.dataset.delcontract));
   root.querySelectorAll("[data-editcontract]").forEach((button) => button.onclick = () => openContractForm(state.contracts.find((c) => c.id === button.dataset.editcontract)));
   root.querySelectorAll("[data-printcontract]").forEach((button) => button.onclick = () => { state.printContract = state.contracts.find((c) => c.id === button.dataset.printcontract) || null; render(); });
+  root.querySelectorAll("[data-accounttask]").forEach((container) => {
+    const updateChequeFields = () => {
+      const show = container.querySelector("[data-tasktype]")?.value === "receipt" && container.querySelector("[data-taskpayment]")?.value === "Cheque";
+      container.querySelectorAll("[data-taskchequefield]").forEach((field) => { field.hidden = !show; });
+    };
+    const type = container.querySelector("[data-tasktype]"); if (type) type.onchange = updateChequeFields;
+    const payment = container.querySelector("[data-taskpayment]"); if (payment) payment.onchange = updateChequeFields;
+    updateChequeFields();
+  });
   root.querySelectorAll("[data-fulfilltask]").forEach((button) => button.onclick = () => fulfillAccountTask(button.closest("[data-accounttask]")));
   // staff
   root.querySelectorAll("[data-staffbranch]").forEach((b) => b.onclick = () => { state.staffBranch = b.dataset.staffbranch; render(); });
@@ -4032,6 +4117,13 @@ function wireModals() {
   const dxa = document.getElementById("doccancel"); if (dxa) dxa.onclick = () => { state.docForm = null; render(); };
   const dxs = document.getElementById("docsave"); if (dxs) dxs.onclick = saveDoc;
   const ddeal = document.getElementById("d_deal"); if (ddeal) ddeal.onchange = docPrefill;
+  const updateDocChequeFields = () => {
+    const fields = document.getElementById("docchequefields");
+    if (fields) fields.hidden = !(document.getElementById("d_type")?.value === "receipt" && document.getElementById("d_pay")?.value === "Cheque");
+  };
+  const dtype = document.getElementById("d_type"); if (dtype) dtype.onchange = updateDocChequeFields;
+  const dpay = document.getElementById("d_pay"); if (dpay) dpay.onchange = updateDocChequeFields;
+  updateDocChequeFields();
   // cash modal
   const cxc = document.getElementById("cashclose"); if (cxc) cxc.onclick = () => { state.cashForm = null; render(); };
   const cxa = document.getElementById("cashcancel"); if (cxa) cxa.onclick = () => { state.cashForm = null; render(); };

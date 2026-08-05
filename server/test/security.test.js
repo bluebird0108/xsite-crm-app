@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const { sanitizeWrite, hasKnownFilter } = require("../write-policy");
 const { rateLimit, resetRateLimits } = require("../rate-limit");
 const { isAllowedDocumentKey } = require("../storage-policy");
+const { validateMoneyDocument } = require("../money-doc-policy");
 
 test("profile fields cannot pass through the generic update endpoint", () => {
   assert.throws(() => sanitizeWrite("profiles", "update", "admin", { role: "owner" }), /cannot be updated/);
@@ -49,4 +50,18 @@ test("document storage accepts categorized UUID paths only", () => {
   assert.equal(isAllowedDocumentKey(`kyc-and-ids/${id}/${file}`), true);
   assert.equal(isAllowedDocumentKey(`../../root/${file}`), false);
   assert.equal(isAllowedDocumentKey(`${id}/${file}`), false);
+});
+
+test("money documents require a valid type, status, amount, and manual agent", () => {
+  assert.throws(() => validateMoneyDocument({ docType: "invoice", status: "draft", amount: 100, details: {} }), /Agent name/);
+  assert.throws(() => validateMoneyDocument({ docType: "receipt", status: "paid", amount: 100, details: { agent: "Agent" } }), /Invalid receipt status/);
+  assert.equal(validateMoneyDocument({ docType: "invoice", status: "draft", amount: 100, details: { agent: "Agent" } }).status, "draft");
+});
+
+test("cheque receipts require structured cheque details", () => {
+  const base = { docType: "receipt", status: "received", amount: 100, paymentMethod: "Cheque", details: { agent: "Agent" } };
+  assert.throws(() => validateMoneyDocument(base), /Cheque number/);
+  const valid = validateMoneyDocument({ ...base, details: { agent: "Agent", cheque_number: "001", cheque_bank: "Mashreq", cheque_date: "2026-08-05" } });
+  assert.equal(valid.details.cheque_number, "001");
+  assert.equal(validateMoneyDocument({ ...base, status: "draft" }).status, "draft");
 });

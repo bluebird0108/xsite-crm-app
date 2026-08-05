@@ -4,6 +4,7 @@
 const router = require("express").Router();
 const { q, tx, sqlInsert, sqlUpdate, pick, coerce } = require("../db");
 const { need } = require("../auth");
+const { validateMoneyDocument } = require("../money-doc-policy");
 
 const MONEY = ["owner", "accounts"];
 // "manager" mirrors "admin" for management actions (contracts, contacts, roles).
@@ -125,16 +126,24 @@ const HANDLERS = {
   async fulfill_account_task(u, p) {
     if (!need(u, MONEY)) throw err("Only Owner or Accounts can issue documents");
     return tx(async (c) => {
-      const task = (await c.query("select * from account_tasks where id=$1", [p.p_task_id])).rows[0];
+      const task = (await c.query("select * from account_tasks where id=$1 for update", [p.p_task_id])).rows[0];
       if (!task) throw err("Task not found");
+      if (task.status !== "pending") throw err("This contract notification has already been handled");
       const contract = (await c.query("select * from contracts where id=$1", [task.contract_id])).rows[0];
+      if (!contract) throw err("Contract not found");
+      let checked;
+      try {
+        checked = validateMoneyDocument({ docType: p.p_doc_type, status: p.p_status || "draft", amount: p.p_amount,
+          paymentMethod: p.p_payment_method, details: p.p_details });
+      } catch (error) { throw err(error.message); }
       const doc_no = await nextDocNo(c, p.p_doc_type);
       const doc = await ins(c, "money_docs", {
         doc_type: p.p_doc_type, doc_no, deal_group: contract ? contract.deal_group : null,
         doc_date: p.p_doc_date, client: contract ? contract.tenant_name : null,
         description: contract ? `Contract ${contract.contract_no}` : null,
-        amount: p.p_amount, payment_method: p.p_payment_method,
-        status: p.p_doc_type === "receipt" ? "received" : "pending", month: ym(p.p_doc_date),
+        amount: checked.amount, payment_method: checked.paymentMethod, details: {
+          ...checked.details, contract_id: contract.id, contract_no: contract.contract_no,
+        }, status: checked.status, month: ym(p.p_doc_date),
       });
       await c.query("update account_tasks set money_doc_id=$1, status='completed', completed_by=$2, completed_at=now() where id=$3",
         [doc.id, u.id, p.p_task_id]);
@@ -144,17 +153,23 @@ const HANDLERS = {
   async create_money_doc(u, p) {
     if (!need(u, MONEY)) throw err("Only Owner or Accounts can post documents");
     return tx(async (c) => {
+      let checked;
+      try {
+        checked = validateMoneyDocument({ docType: p.p_doc_type, status: p.p_status, amount: p.p_amount,
+          paymentMethod: p.p_payment_method, details: p.p_details });
+      } catch (error) { throw err(error.message); }
       const doc_no = await nextDocNo(c, p.p_doc_type);
       return ins(c, "money_docs", {
         doc_type: p.p_doc_type, doc_no, deal_group: p.p_deal_group || null, doc_date: p.p_doc_date,
-        client: p.p_client, description: p.p_description, amount: p.p_amount,
-        payment_method: p.p_payment_method, status: p.p_status, month: ym(p.p_doc_date),
+        client: p.p_client, description: p.p_description, amount: checked.amount,
+        payment_method: checked.paymentMethod, status: checked.status, month: ym(p.p_doc_date), details: checked.details,
       });
     });
   },
   async mark_invoice_paid(u, p) {
     if (!need(u, MONEY)) throw err("Not authorized");
-    await q("update money_docs set status='paid' where id=$1", [p.p_doc_id]);
+    const updated = await q("update money_docs set status='paid' where id=$1 and doc_type='invoice' and status='pending' returning id", [p.p_doc_id]);
+    if (!updated.rowCount) throw err("Only a pending invoice can be marked paid");
     return null;
   },
   async delete_money_doc(u, p) {

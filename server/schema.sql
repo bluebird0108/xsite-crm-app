@@ -124,7 +124,18 @@ create table if not exists money_docs (
   payment_method text,
   status         text,
   month          text,
-  details        jsonb
+  details        jsonb not null default '{}'::jsonb,
+  constraint money_docs_type_status_check check (
+    (doc_type = 'invoice' and status in ('draft','pending','paid')) or
+    (doc_type = 'receipt' and status in ('draft','received'))
+  ),
+  constraint money_docs_agent_required check (btrim(coalesce(details->>'agent','')) <> ''),
+  constraint money_docs_cheque_required check (
+    doc_type <> 'receipt' or status = 'draft' or payment_method <> 'Cheque' or
+    (btrim(coalesce(details->>'cheque_number','')) <> '' and
+     btrim(coalesce(details->>'cheque_bank','')) <> '' and
+     btrim(coalesce(details->>'cheque_date','')) <> '')
+  )
 );
 
 create table if not exists cash_movements (
