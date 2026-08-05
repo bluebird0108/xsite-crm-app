@@ -10,8 +10,10 @@ create table if not exists users (
   id            uuid primary key default gen_random_uuid(),
   email         text unique not null,
   password_hash text not null,
+  token_version integer not null default 0,
   created_at    timestamptz not null default now()
 );
+alter table users add column if not exists token_version integer not null default 0;
 
 create table if not exists profiles (
   id         uuid primary key references users(id) on delete cascade,

@@ -5,7 +5,10 @@ const { loadMeta, q } = require("./db");
 const { authMiddleware } = require("./auth");
 
 const app = express();
+app.disable("x-powered-by");
+app.set("trust proxy", "loopback");
 app.use(express.json({ limit: "2mb" }));
+app.use("/api", (_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
 
 app.get("/api/health", async (_req, res) => {
   try { await q("select 1"); res.json({ ok: true }); }

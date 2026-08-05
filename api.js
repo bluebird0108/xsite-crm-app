@@ -100,6 +100,7 @@ export function createClient() {
     async signOut() { setToken(null); return { error: null }; },
     async updateUser({ password }) {
       const r = await http("POST", "/auth/change-password", { password });
+      if (!r.error && r.data && r.data.token) setToken(r.data.token);
       return { data: r.data, error: r.error };
     },
     async resetPasswordForEmail() {

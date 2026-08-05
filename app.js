@@ -2897,9 +2897,9 @@ async function saveKyc() {
   const data = readKycData();
   if (!data.identity.firstName && !data.identity.lastName) { msg.textContent = "Enter at least a first or last name."; return; }
   const btn = document.getElementById("kycsave"); btn.disabled = true; btn.textContent = "Saving…";
-  const row = { contact_id: f.contact_id, branch_ref: v("ky_branch_ref") || null, status: v("ky_status") || "draft", data, updated_at: new Date().toISOString() };
+  const row = { contact_id: f.contact_id, branch_ref: v("ky_branch_ref") || null, status: v("ky_status") || "draft", data };
   const res = f.id
-    ? await supabase.from("kyc_forms").update(row).eq("id", f.id)
+    ? await supabase.from("kyc_forms").update({ ...row, updated_at: new Date().toISOString() }).eq("id", f.id)
     : await supabase.from("kyc_forms").insert(row);
   if (res.error) { msg.textContent = res.error.message; btn.disabled = false; btn.textContent = "Save KYC"; return; }
   if (!await reloadAfterWrite(reloadKyc, "KYC form")) return;

@@ -7,7 +7,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "migrate": "node migrate.js"
+    "migrate": "node migrate.js",
+    "test": "node test/security.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
