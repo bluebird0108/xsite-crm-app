@@ -595,7 +595,7 @@ function viewStaff() {
         <div><dt>Nationality</dt><dd>${esc(s.nationality || "—")}</dd></div>
         <div><dt>Branch</dt><dd>${esc(s.branch || "—")}</dd></div>
         <div><dt>Card no</dt><dd>${esc(s.card_number || "—")}</dd></div>
-        <div><dt>Birthday</dt><dd>${s.birthday && isoRe.test(s.birthday) ? esc(showDate(s.birthday)) : "—"}</dd></div>
+        <div><dt>Birthday</dt><dd>${s.birthday && isoRe.test(s.birthday) ? esc(s.birthday.startsWith("1900-") ? `${s.birthday.slice(8, 10)}-${MONTHS[+s.birthday.slice(5, 7) - 1]}` : showDate(s.birthday)) : "—"}</dd></div>
       </dl>
     </article>`;
   }).join("");
