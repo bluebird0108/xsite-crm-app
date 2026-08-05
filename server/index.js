@@ -18,6 +18,10 @@ app.use("/api/auth", require("./routes/auth"));
 // Files: per-route auth (raw download is token-authorized).
 app.use("/api/files", require("./routes/files"));
 
+// Listing media: per-route auth. Upload is owner/admin; raw serve is PUBLIC so
+// the property portals can fetch listing images by URL.
+app.use("/api/media", require("./routes/media"));
+
 // Everything else requires a valid session.
 app.use("/api/db", authMiddleware, require("./routes/db"));
 app.use("/api/rpc", authMiddleware, require("./routes/rpc"));

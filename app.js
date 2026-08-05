@@ -2486,7 +2486,7 @@ function emptyListingForm() {
   return { id: null, ref_no: "", status: "draft", offering_type: "sale", property_type: "Apartment",
     title: "", description: "", price: "", rent_period: "yearly", bedrooms: "1", bathrooms: "1",
     size_sqft: "", city: "Dubai", community: "", sub_community: "", tower: "", furnishing: "Unfurnished",
-    amenities: "", photos: "", permit_number: "", permit_qr_url: "", dtcm_permit: "", agent_name: "",
+    amenities: "", photos: [], permit_number: "", permit_qr_url: "", dtcm_permit: "", agent_name: "",
     publish_pf: false, publish_bayut: false, publish_dubizzle: false, msg: "" };
 }
 function listingFormFromRow(l) {
@@ -2495,7 +2495,7 @@ function listingFormFromRow(l) {
     price: l.price ?? "", rent_period: l.rent_period || "yearly", bedrooms: l.bedrooms || "", bathrooms: l.bathrooms || "",
     size_sqft: l.size_sqft ?? "", city: l.city || "Dubai", community: l.community || "", sub_community: l.sub_community || "",
     tower: l.tower || "", furnishing: l.furnishing || "Unfurnished",
-    amenities: (l.amenities || []).join(", "), photos: (l.photos || []).join("\n"),
+    amenities: (l.amenities || []).join(", "), photos: Array.isArray(l.photos) ? l.photos.slice() : [],
     permit_number: l.permit_number || "", permit_qr_url: l.permit_qr_url || "", dtcm_permit: l.dtcm_permit || "",
     agent_name: l.agent_name || "", publish_pf: !!l.publish_pf, publish_bayut: !!l.publish_bayut,
     publish_dubizzle: !!l.publish_dubizzle, msg: "" };
@@ -2576,7 +2576,12 @@ function viewListingModal() {
       <div class="contract-form-section"><h4>Media &amp; description</h4><div class="form-grid">
         <div class="field" style="grid-column:1/-1"><label for="ls_desc">Description</label><textarea class="input" id="ls_desc" rows="4" maxlength="4000">${esc(f.description)}</textarea></div>
         <div class="field" style="grid-column:1/-1"><label for="ls_amenities">Amenities</label><input class="input" id="ls_amenities" value="${esc(f.amenities)}"><span class="text-muted" style="font-size:11px">Comma-separated (e.g. Balcony, Covered parking, Gym)</span></div>
-        <div class="field" style="grid-column:1/-1"><label for="ls_photos">Photo URLs</label><textarea class="input" id="ls_photos" rows="3" placeholder="One public image URL per line">${esc(f.photos)}</textarea><span class="text-muted" style="font-size:11px">Public image URLs the portals can fetch (one per line).</span></div>
+        <div class="field" style="grid-column:1/-1"><label>Photos</label>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">${(f.photos || []).map((u, i) => `<div style="position:relative;width:88px;height:66px"><img src="${esc(u)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:6px;border:1px solid #d8d8d8"><button type="button" data-rmphoto="${i}" title="Remove" style="position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:50%;border:0;background:#b91c1c;color:#fff;cursor:pointer;line-height:1">×</button></div>`).join("") || `<span class="text-muted" style="font-size:11px">No photos yet.</span>`}</div>
+          <input type="file" id="ls_photo_input" accept="image/jpeg,image/png,image/webp,image/gif" multiple style="display:none">
+          <button type="button" class="btn btn-secondary btn-mini" id="ls_photo_btn">＋ Upload photos</button>
+          <span class="text-muted" style="font-size:11px;display:block;margin-top:4px">JPG/PNG/WebP/GIF, up to 15 MB each — uploaded to a public URL the portals can fetch.</span>
+        </div>
       </div></div>
       <div class="contract-form-section"><h4>DLD permit (Trakheesi)</h4><div class="form-grid">
         ${inp("ls_permit", "Trakheesi permit no.", f.permit_number)}
@@ -2592,28 +2597,42 @@ function viewListingModal() {
     </div>
   </div></div>`;
 }
+// Read every form field into state.listingForm so re-renders (photo upload/remove)
+// never lose typed values. Photos live in f.photos (managed by the uploader).
+function collectListingForm() {
+  const f = state.listingForm; if (!f) return;
+  const g = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
+  const chk = (id) => { const el = document.getElementById(id); return el ? el.checked : undefined; };
+  const fields = { ls_ref: "ref_no", ls_offering: "offering_type", ls_ptype: "property_type", ls_title: "title",
+    ls_desc: "description", ls_price: "price", ls_rentperiod: "rent_period", ls_beds: "bedrooms", ls_baths: "bathrooms",
+    ls_size: "size_sqft", ls_city: "city", ls_community: "community", ls_subcommunity: "sub_community",
+    ls_tower: "tower", ls_furnishing: "furnishing", ls_amenities: "amenities", ls_permit: "permit_number",
+    ls_permitqr: "permit_qr_url", ls_dtcm: "dtcm_permit", ls_agent: "agent_name" };
+  for (const [id, key] of Object.entries(fields)) { const v = g(id); if (v !== undefined) f[key] = v; }
+  for (const [id, key] of [["ls_pf", "publish_pf"], ["ls_bayut", "publish_bayut"], ["ls_dubizzle", "publish_dubizzle"]]) {
+    const v = chk(id); if (v !== undefined) f[key] = v;
+  }
+}
 async function saveListing() {
+  collectListingForm();
   const f = state.listingForm;
-  const g = (id) => { const el = document.getElementById(id); return el ? el.value : ""; };
-  const chk = (id) => { const el = document.getElementById(id); return !!(el && el.checked); };
   const msg = document.getElementById("listingmsg");
-  const title = g("ls_title").trim();
-  if (title.length < 3) { msg.textContent = "Enter a listing title (at least 3 characters)."; return; }
+  if (String(f.title || "").trim().length < 3) { msg.textContent = "Enter a listing title (at least 3 characters)."; return; }
   const btn = document.getElementById("listingsave"); btn.disabled = true; btn.textContent = "Saving…";
   const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
-  const arr = (v) => v.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
-  const offering = g("ls_offering");
+  const txt = (v) => (v && String(v).trim() ? String(v).trim() : null);
   const rec = {
-    ref_no: g("ls_ref").trim() || null, offering_type: offering, property_type: g("ls_ptype"),
-    title, description: g("ls_desc").trim() || null, price: num(g("ls_price")),
-    rent_period: offering === "rent" ? g("ls_rentperiod") : null,
-    bedrooms: g("ls_beds") || null, bathrooms: g("ls_baths") || null, size_sqft: num(g("ls_size")),
-    city: g("ls_city").trim() || "Dubai", community: g("ls_community").trim() || null,
-    sub_community: g("ls_subcommunity").trim() || null, tower: g("ls_tower").trim() || null,
-    furnishing: g("ls_furnishing"), amenities: arr(g("ls_amenities")), photos: arr(g("ls_photos")),
-    permit_number: g("ls_permit").trim() || null, permit_qr_url: g("ls_permitqr").trim() || null,
-    dtcm_permit: g("ls_dtcm").trim() || null, agent_name: g("ls_agent") || null,
-    publish_pf: chk("ls_pf"), publish_bayut: chk("ls_bayut"), publish_dubizzle: chk("ls_dubizzle"),
+    ref_no: txt(f.ref_no), offering_type: f.offering_type, property_type: f.property_type,
+    title: String(f.title).trim(), description: txt(f.description), price: num(f.price),
+    rent_period: f.offering_type === "rent" ? f.rent_period : null,
+    bedrooms: txt(f.bedrooms), bathrooms: txt(f.bathrooms), size_sqft: num(f.size_sqft),
+    city: txt(f.city) || "Dubai", community: txt(f.community), sub_community: txt(f.sub_community),
+    tower: txt(f.tower), furnishing: f.furnishing,
+    amenities: String(f.amenities || "").split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
+    photos: (f.photos || []).slice(),
+    permit_number: txt(f.permit_number), permit_qr_url: txt(f.permit_qr_url), dtcm_permit: txt(f.dtcm_permit),
+    agent_name: txt(f.agent_name),
+    publish_pf: !!f.publish_pf, publish_bayut: !!f.publish_bayut, publish_dubizzle: !!f.publish_dubizzle,
   };
   let error;
   if (f.id) ({ error } = await supabase.from("listings").update(rec).eq("id", f.id));
@@ -2621,6 +2640,27 @@ async function saveListing() {
   if (error) { msg.textContent = error.message; btn.disabled = false; btn.textContent = f.id ? "Save changes" : "Save listing"; return; }
   if (!await reloadAfterWrite(reloadListings, "Listing")) return;
   state.listingForm = null; render();
+}
+async function uploadListingPhotos(files) {
+  const f = state.listingForm; if (!f || !files || !files.length) return;
+  collectListingForm();
+  const token = localStorage.getItem("xsite_token");
+  const msg = document.getElementById("listingmsg"); if (msg) msg.textContent = "Uploading photos…";
+  for (const file of files) {
+    const fd = new FormData(); fd.append("file", file);
+    try {
+      const res = await fetch("/api/media/upload", { method: "POST", headers: token ? { authorization: `Bearer ${token}` } : {}, body: fd });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) { if (msg) msg.textContent = (json && json.error) || "Upload failed"; continue; }
+      f.photos.push(window.location.origin + json.data.url);
+    } catch { if (msg) msg.textContent = "Upload failed — network error."; }
+  }
+  render();
+}
+function removeListingPhoto(i) {
+  const f = state.listingForm; if (!f) return;
+  collectListingForm();
+  f.photos.splice(i, 1); render();
 }
 async function setListingPublished(id, publish) {
   const l = state.listings.find((x) => x.id === id);
@@ -3877,6 +3917,9 @@ function wireScreen() {
   const listingClose = document.getElementById("listingclose"); if (listingClose) listingClose.onclick = () => { state.listingForm = null; render(); };
   const listingCancel = document.getElementById("listingcancel"); if (listingCancel) listingCancel.onclick = () => { state.listingForm = null; render(); };
   const listingSave = document.getElementById("listingsave"); if (listingSave) listingSave.onclick = saveListing;
+  const photoBtn = document.getElementById("ls_photo_btn"), photoInput = document.getElementById("ls_photo_input");
+  if (photoBtn && photoInput) { photoBtn.onclick = () => photoInput.click(); photoInput.onchange = () => uploadListingPhotos([...photoInput.files]); }
+  root.querySelectorAll("[data-rmphoto]").forEach((b) => b.onclick = () => removeListingPhoto(parseInt(b.dataset.rmphoto, 10)));
   const listingq = document.getElementById("listingq");
   if (listingq) listingq.oninput = () => {
     state.listingQuery = listingq.value;
