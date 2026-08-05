@@ -22,6 +22,9 @@ app.use("/api/files", require("./routes/files"));
 // the property portals can fetch listing images by URL.
 app.use("/api/media", require("./routes/media"));
 
+// Listing feeds: PUBLIC XML the portals pull (guarded by ?key=FEED_KEY).
+app.use("/api/feed", require("./routes/feed"));
+
 // Everything else requires a valid session.
 app.use("/api/db", authMiddleware, require("./routes/db"));
 app.use("/api/rpc", authMiddleware, require("./routes/rpc"));
