@@ -826,14 +826,14 @@ function contractHandoffSection() {
     return `<tr><td><strong>${esc(contract.contract_no)}</strong><div class="text-muted" style="font-size:11px">${showDate(contract.start_date)} – ${showDate(contract.end_date)}</div></td>
       <td>${esc(contract.tenant_name)}<div class="text-muted" style="font-size:11px">${esc(contract.tenant_phone || "")}</div></td>
       <td>${esc(contract.landlord_name || "—")}<div class="text-muted" style="font-size:11px">${esc(contract.owner_phone || "")}</div></td>
-      <td class="numeric">${money(contract.annual_rent)}</td>
-      <td class="numeric">${money(contract.security_deposit)}</td>
+      ${canFulfill ? `<td class="numeric">${money(contract.annual_rent)}</td>
+      <td class="numeric">${money(contract.security_deposit)}</td>` : ""}
       <td>${esc(contract.payment_mode || "—")}</td>
       <td><button class="btn btn-secondary btn-mini" data-files="${contract.id}">Files${fileCount(contract.id) ? ` (${fileCount(contract.id)})` : ""}</button></td>
       <td><span class="tag ${task.status === "pending" ? "tag-accent" : "tag-neutral"}">${esc(task.status)}</span></td><td>${action}</td></tr>`;
   }).join("");
   return `<section class="md-section" style="margin-bottom:20px"><div class="md-section-header"><h3>Contracts awaiting Accounts</h3><span class="tag ${pending ? "tag-accent" : "tag-neutral"}">${pending} pending</span></div>
-    ${pending ? `<div class="table-wrap"><table class="grid" style="min-width:1100px"><thead><tr><th>Contract</th><th>Tenant</th><th>Landlord / owner</th><th>Annual rent</th><th>Deposit</th><th>Payment mode</th><th>Documents</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div>` : `<div class="md-empty" style="border:0">All caught up — every finalized contract has its invoice or receipt.</div>`}</section>`;
+    ${pending ? `<div class="table-wrap"><table class="grid" style="min-width:1100px"><thead><tr><th>Contract</th><th>Tenant</th><th>Landlord / owner</th>${canFulfill ? `<th>Annual rent</th><th>Deposit</th>` : ""}<th>Payment mode</th><th>Documents</th><th>Status</th><th>Create invoice or receipt</th></tr></thead><tbody>${taskRows}</tbody></table></div>` : `<div class="md-empty" style="border:0">All caught up — every finalized contract has its invoice or receipt.</div>`}</section>`;
 }
 
 function viewContracts() {
@@ -1125,9 +1125,9 @@ function viewDashboard() {
   const tiers = expiryTiers();
   const expiringSoon = tiers.slice(1).reduce((s, t) => s + t.items.length, 0);
   const kicker = p.role === "owner" ? "Owner / Overview" : p.role === "accounts" ? "Accounts workspace" : p.role === "manager" ? "Manager workspace" : "Admin workspace";
-  // Admin is an operational role (contracts / requests / staff) and must not see any
-  // financial figures on the dashboard — only counts. Money widgets are gated on this.
-  const canSeeMoney = roleIn("owner", "accounts", "manager");
+  // Only owner and accounts may see money. Admin and manager are operational roles
+  // (contracts / requests / staff) and see counts only. Money widgets gate on this.
+  const canSeeMoney = roleIn("owner", "accounts");
   const kpis = `
   <section class="md-kpi-grid">
     <div class="md-kpi is-accent"><span class="card-kicker">Deals this month</span><span class="md-kpi-value">${deals.length}</span><span class="md-kpi-detail">${monthLabel(state.txMonth)} register</span></div>
