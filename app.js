@@ -19,8 +19,9 @@ const state = {
   screen: "dashboard",
   authMode: "signin",
   agents: [], deals: [], commission: [], cash: [], team: [], docs: [], staff: [], requests: [], contracts: [], accountTasks: [],
-  contacts: [], cashMovements: [], contractFiles: [], submissions: [], kyc: [],
+  contacts: [], cashMovements: [], contractFiles: [], submissions: [], kyc: [], listings: [],
   selectedAgent: null,
+  listingForm: null, listingQuery: "",
   txQuery: "", txType: "All", ledgerQuery: "", ledgerTeam: "All", accTab: "master",
   txMonth: null, ledgerMonth: null, ceMonth: null, ceQuery: "", ceForm: null,
   invMonth: null, invType: "All", invQuery: "",
@@ -99,6 +100,7 @@ const COLUMNS = {
   account_tasks: "id,contract_id,task_type,status,money_doc_id,completed_by,completed_at,created_at",
   contacts: "id,name,contact_type,phone,email,notes,last_contact,birthday,created_by,created_at,updated_at",
   kyc_forms: "id,contact_id,branch_ref,status,data,created_by,created_at,updated_at",
+  listings: "id,ref_no,status,offering_type,property_type,title,description,price,rent_period,bedrooms,bathrooms,size_sqft,city,community,sub_community,tower,furnishing,amenities,photos,permit_number,permit_qr_url,dtcm_permit,agent_name,publish_pf,publish_bayut,publish_dubizzle,published_at,created_by,created_at,updated_at",
   contract_files: "id,contract_id,submission_id,doc_type,file_name,storage_path,size_bytes,uploaded_by_name,created_at",
   deal_submissions: "id,status,submitted_by_name,agent_name,owner_name,owner_phone,owner_email,owner_emirates_id,tenant_name,tenant_phone,tenant_email,tenant_emirates_id,building,unit,area,moving_date,cheque_count,price,dewa_number,notes,contract_id,reviewed_by_name,created_at",
   cash_movements: "id,movement_date,direction,channel,bank_account,agent_name,client,property,amount,reference,month,created_by,created_at",
@@ -152,10 +154,10 @@ async function loadData() {
     state.team = []; state.docs = []; state.staff = []; state.requests = [];
     state.contracts = []; state.accountTasks = [];
     state.contacts = []; state.cashMovements = []; state.contractFiles = []; state.submissions = [];
-    state.kyc = [];
+    state.kyc = []; state.listings = [];
     return;
   }
-  const [ag, dl, cm, ch, tm, md, sf, rq, ct, at, co, mv, cf, sb, ky] = await Promise.all([
+  const [ag, dl, cm, ch, tm, md, sf, rq, ct, at, co, mv, cf, sb, ky, ls] = await Promise.all([
     fetchAll("agents", "name"),
     fetchAll("deals", "sno"),
     fetchAll("commission_entries", "agent_name"),
@@ -171,6 +173,7 @@ async function loadData() {
     fetchAllSafe("contract_files", "created_at", false),
     fetchAllSafe("deal_submissions", "created_at", false),
     roleIn("owner", "accounts", "admin", "manager") ? fetchAllSafe("kyc_forms", "created_at", false) : Promise.resolve({ data: [] }),
+    roleIn("owner", "admin") ? fetchAllSafe("listings", "created_at", false) : Promise.resolve({ data: [] }),
   ]);
   state.agents = requireData(ag, "Could not load agents");
   state.deals = requireData(dl, "Could not load deals");
@@ -187,6 +190,7 @@ async function loadData() {
   state.contractFiles = requireData(cf, "Could not load documents");
   state.submissions = requireData(sb, "Could not load deal submissions");
   state.kyc = requireData(ky, "Could not load KYC forms");
+  state.listings = requireData(ls, "Could not load listings");
   const cbmonths = availableMonths(state.cashMovements, "month");
   if (!state.cbMonth || !cbmonths.includes(state.cbMonth)) state.cbMonth = cbmonths[0] || null;
   const cemonths = availableMonths(state.commission, "month");
@@ -234,6 +238,10 @@ async function reloadContacts() {
 async function reloadKyc() {
   const result = await fetchAllSafe("kyc_forms", "created_at", false);
   state.kyc = requireData(result, "Could not reload KYC forms");
+}
+async function reloadListings() {
+  const result = await fetchAllSafe("listings", "created_at", false);
+  state.listings = requireData(result, "Could not reload listings");
 }
 
 async function reloadCashMovements() {
@@ -437,6 +445,7 @@ function renderApp() {
     ${roleIn("owner") ? navLink("activity", "Team Activity") : ""}
     ${roleIn("owner", "accounts", "admin", "manager") ? navLink("contracts", contractAlerts ? `Contracts (${contractAlerts})` : "Contracts") : ""}
     ${roleIn("owner", "admin", "manager") ? navLink("contacts", "Contacts") : ""}
+    ${roleIn("owner", "admin") ? navLink("listings", "Listings") : ""}
     ${roleIn("owner", "accounts") ? navLink("transactions", "Transactions") : roleIn("manager") ? navLink("invoices", "Accounts") : ""}
     ${roleIn("owner", "accounts", "agent", "manager") ? navLink("ledgers", roleIn("agent") ? "My Ledger" : "Agent Ledgers") : ""}
     ${roleIn("owner", "admin", "manager", "agent") ? navLink("submissions", newSubs ? `Submissions (${newSubs})` : "Submissions") : ""}
@@ -462,12 +471,13 @@ function renderApp() {
   else if (state.screen === "submissions" && roleIn("owner", "admin", "manager", "agent")) body = viewSubmissions();
   else if (state.screen === "requests") body = viewRequests();
   else if (state.screen === "staff" && roleIn("owner", "admin", "manager")) body = viewStaff();
+  else if (state.screen === "listings" && roleIn("owner", "admin")) body = viewListings();
   else if (state.screen === "team" && showTeam) body = viewTeam();
   else if (state.screen === "dashboard" && roleIn("owner", "accounts", "admin")) body = viewDashboard();
   else if (roleIn("agent")) body = viewLedgers();
   else if (roleIn("manager")) body = viewContracts();
   else body = viewDashboard();
-  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewReceiptPrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail() + viewCeModal() + viewStaffModal() + viewEjariHelp() + viewLedgerStatement() + viewKycModal();
+  root.innerHTML = nav + `<main>${body}</main>` + viewDealModal() + viewPwModal() + viewDocModal() + viewCashModal() + viewRequestModal() + viewContractModal() + viewContractPrint() + viewInvoicePrint() + viewReceiptPrint() + viewContactModal() + viewCashMoveModal() + viewFilesModal() + viewSubModal() + viewSubDetail() + viewCeModal() + viewStaffModal() + viewEjariHelp() + viewLedgerStatement() + viewKycModal() + viewListingModal();
   root.querySelectorAll("[data-screen]").forEach((a) => a.onclick = () => { state.screen = a.dataset.screen; render(); });
   document.getElementById("logout").onclick = async () => {
     try { await supabase.auth.signOut({ scope: "local" }); } catch {}
@@ -2466,6 +2476,172 @@ async function deleteContact(id) {
   if (!await reloadAfterWrite(reloadContacts, "Contact deletion")) return;
   render();
 }
+
+// ── view: property listings (portal syndication) ─────────────────────────
+const LISTING_PROPERTY_TYPES = ["Apartment", "Villa", "Townhouse", "Penthouse", "Duplex", "Office", "Shop", "Warehouse", "Land", "Building", "Labour Camp"];
+const LISTING_FURNISHING = ["Unfurnished", "Furnished", "Partly furnished"];
+const LISTING_BEDROOMS = ["Studio", "1", "2", "3", "4", "5", "6", "7", "8+"];
+const LISTING_BATHROOMS = ["1", "2", "3", "4", "5", "6", "7+"];
+function emptyListingForm() {
+  return { id: null, ref_no: "", status: "draft", offering_type: "sale", property_type: "Apartment",
+    title: "", description: "", price: "", rent_period: "yearly", bedrooms: "1", bathrooms: "1",
+    size_sqft: "", city: "Dubai", community: "", sub_community: "", tower: "", furnishing: "Unfurnished",
+    amenities: "", photos: "", permit_number: "", permit_qr_url: "", dtcm_permit: "", agent_name: "",
+    publish_pf: false, publish_bayut: false, publish_dubizzle: false, msg: "" };
+}
+function listingFormFromRow(l) {
+  return { id: l.id, ref_no: l.ref_no || "", status: l.status || "draft", offering_type: l.offering_type || "sale",
+    property_type: l.property_type || "Apartment", title: l.title || "", description: l.description || "",
+    price: l.price ?? "", rent_period: l.rent_period || "yearly", bedrooms: l.bedrooms || "", bathrooms: l.bathrooms || "",
+    size_sqft: l.size_sqft ?? "", city: l.city || "Dubai", community: l.community || "", sub_community: l.sub_community || "",
+    tower: l.tower || "", furnishing: l.furnishing || "Unfurnished",
+    amenities: (l.amenities || []).join(", "), photos: (l.photos || []).join("\n"),
+    permit_number: l.permit_number || "", permit_qr_url: l.permit_qr_url || "", dtcm_permit: l.dtcm_permit || "",
+    agent_name: l.agent_name || "", publish_pf: !!l.publish_pf, publish_bayut: !!l.publish_bayut,
+    publish_dubizzle: !!l.publish_dubizzle, msg: "" };
+}
+function viewListings() {
+  const q = state.listingQuery.trim().toLowerCase();
+  const rows = state.listings.filter((l) => !q ||
+    [l.title, l.ref_no, l.community, l.tower, l.property_type, l.agent_name, l.permit_number].join(" ").toLowerCase().includes(q));
+  const chip = (on, label) => on ? `<span class="tag tag-accent" style="font-size:10px">${label}</span>` : "";
+  const body = rows.map((l) => {
+    const hasPermit = !!(l.permit_number && String(l.permit_number).trim());
+    const live = l.status === "published";
+    const portals = [chip(l.publish_pf, "PF"), chip(l.publish_bayut, "Bayut"), chip(l.publish_dubizzle, "Dubizzle")].filter(Boolean).join(" ") || `<span class="text-muted" style="font-size:11px">—</span>`;
+    const price = l.price != null && l.price !== "" ? money(l.price) + (l.offering_type === "rent" ? `/${esc((l.rent_period || "yr").slice(0, 2))}` : "") : "—";
+    return `<tr>
+      <td><strong>${esc(l.title || "(untitled)")}</strong><div class="text-muted" style="font-size:11px">${esc(l.ref_no || l.id.slice(0, 8))} · ${esc(l.property_type || "")}</div></td>
+      <td>${esc([l.community, l.tower].filter(Boolean).join(" · ") || "—")}</td>
+      <td class="numeric">${price}</td>
+      <td>${hasPermit ? `<span class="tag tag-neutral" style="font-size:10px">Permit ✓</span>` : `<span class="tag" style="font-size:10px;background:#fde8e8;color:#b91c1c">No permit</span>`}</td>
+      <td>${portals}</td>
+      <td><span class="tag ${live ? "tag-accent" : "tag-neutral"}">${esc(l.status)}</span></td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-secondary btn-mini" data-editlisting="${l.id}">Edit</button>
+        ${live
+          ? `<button class="btn btn-secondary btn-mini" data-unpublisting="${l.id}">Unpublish</button>`
+          : `<button class="btn btn-primary btn-mini" data-publisting="${l.id}"${hasPermit ? "" : ` disabled title="Add a Trakheesi permit first"`}>Publish</button>`}
+        <button class="btn btn-secondary btn-mini" data-dellisting="${l.id}">Delete</button>
+      </td></tr>`;
+  }).join("");
+  return `<div>
+    <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div><span class="card-kicker">Marketing / Listings</span><h1 style="margin-top:4px">Property Listings</h1><p class="text-muted" style="margin:0">Publish to Property Finder, Bayut and Dubizzle. A DLD Trakheesi permit is required before a listing can go live.</p></div>
+      <button class="btn btn-primary" id="newlisting">+ New listing</button>
+    </div>
+    <div class="tx-toolbar">
+      <input class="input" id="listingq" type="search" placeholder="Search title, ref, community, agent, permit…" value="${esc(state.listingQuery)}">
+      <span class="text-muted" style="font-size:12px">${rows.length} of ${state.listings.length}</span>
+    </div>
+    <div class="sheet"><div class="sheet-hint">${state.listings.length} listing records</div>
+      <div class="table-wrap"><table class="grid" style="min-width:960px">
+        <thead><tr><th>Listing</th><th>Location</th><th>Price</th><th>Permit</th><th>Portals</th><th>Status</th><th></th></tr></thead>
+        <tbody>${body || `<tr><td colspan="7"><div class="md-empty" style="border:0">No listings yet — click “New listing” to add one.</div></td></tr>`}</tbody>
+      </table></div>
+    </div>
+  </div>`;
+}
+function viewListingModal() {
+  const f = state.listingForm;
+  if (!f) return "";
+  const opt = (val, o) => `<option value="${esc(o)}" ${val === o ? "selected" : ""}>${esc(o)}</option>`;
+  const sel = (id, label, val, opts) => `<div class="field"><label for="${id}">${label}</label><select class="input" id="${id}">${opts.map((o) => opt(val, o)).join("")}</select></div>`;
+  const inp = (id, label, val, type = "text", extra = "") => `<div class="field"><label for="${id}">${label}</label><input class="input" id="${id}" type="${type}" ${extra} value="${esc(val)}"></div>`;
+  const agentOpts = ["", ...allLedgerNames()].map((n) => `<option value="${esc(n)}" ${f.agent_name === n ? "selected" : ""}>${n ? esc(n) : "— No agent —"}</option>`).join("");
+  const toggle = (id, label, on) => `<label class="clause-check" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="${id}" ${on ? "checked" : ""}> ${label}</label>`;
+  const hasPermit = !!(f.permit_number && String(f.permit_number).trim());
+  return `<div class="modal-backdrop"><div class="modal contract-modal" role="dialog" aria-modal="true" aria-labelledby="listingtitle">
+    <div class="modal-head"><h3 id="listingtitle">${f.id ? "Edit listing" : "New listing"}</h3><button class="modal-close" id="listingclose" aria-label="Close">×</button></div>
+    <div class="modal-body">
+      <div class="contract-form-section"><h4>Property</h4><div class="form-grid">
+        <div class="field" style="grid-column:1/-1"><label for="ls_title">Title</label><input class="input" id="ls_title" maxlength="200" value="${esc(f.title)}"></div>
+        ${sel("ls_offering", "Offering", f.offering_type, ["sale", "rent"])}
+        ${sel("ls_ptype", "Property type", f.property_type, LISTING_PROPERTY_TYPES)}
+        ${sel("ls_beds", "Bedrooms", f.bedrooms, LISTING_BEDROOMS)}
+        ${sel("ls_baths", "Bathrooms", f.bathrooms, LISTING_BATHROOMS)}
+        ${inp("ls_size", "Size (sq.ft)", f.size_sqft, "number", 'min="0" step="0.01"')}
+        ${sel("ls_furnishing", "Furnishing", f.furnishing, LISTING_FURNISHING)}
+        ${inp("ls_price", "Price (AED)", f.price, "number", 'min="0" step="0.01"')}
+        ${sel("ls_rentperiod", "Rent period", f.rent_period, ["yearly", "monthly", "weekly", "daily"])}
+      </div></div>
+      <div class="contract-form-section"><h4>Location</h4><div class="form-grid">
+        ${inp("ls_community", "Community / area", f.community)}
+        ${inp("ls_subcommunity", "Sub-community", f.sub_community)}
+        ${inp("ls_tower", "Tower / building", f.tower)}
+        ${inp("ls_city", "City", f.city)}
+        <div class="field"><label for="ls_agent">Listing agent</label><select class="input" id="ls_agent">${agentOpts}</select></div>
+        ${inp("ls_ref", "Reference no.", f.ref_no)}
+      </div></div>
+      <div class="contract-form-section"><h4>Media &amp; description</h4><div class="form-grid">
+        <div class="field" style="grid-column:1/-1"><label for="ls_desc">Description</label><textarea class="input" id="ls_desc" rows="4" maxlength="4000">${esc(f.description)}</textarea></div>
+        <div class="field" style="grid-column:1/-1"><label for="ls_amenities">Amenities</label><input class="input" id="ls_amenities" value="${esc(f.amenities)}"><span class="text-muted" style="font-size:11px">Comma-separated (e.g. Balcony, Covered parking, Gym)</span></div>
+        <div class="field" style="grid-column:1/-1"><label for="ls_photos">Photo URLs</label><textarea class="input" id="ls_photos" rows="3" placeholder="One public image URL per line">${esc(f.photos)}</textarea><span class="text-muted" style="font-size:11px">Public image URLs the portals can fetch (one per line).</span></div>
+      </div></div>
+      <div class="contract-form-section"><h4>DLD permit (Trakheesi)</h4><div class="form-grid">
+        ${inp("ls_permit", "Trakheesi permit no.", f.permit_number)}
+        ${inp("ls_permitqr", "Madmoun QR image URL", f.permit_qr_url)}
+        ${inp("ls_dtcm", "DTCM permit (short-term)", f.dtcm_permit)}
+        <div class="field" style="grid-column:1/-1"><span class="text-muted" style="font-size:11px">${hasPermit ? "✓ Permit on file — this listing can be published." : "A Trakheesi permit is legally required before this listing can go live on any portal."}</span></div>
+      </div></div>
+      <div class="contract-form-section"><h4>Publish to portals</h4>
+        <div class="clause-grid">${toggle("ls_pf", "Property Finder", f.publish_pf)}${toggle("ls_bayut", "Bayut", f.publish_bayut)}${toggle("ls_dubizzle", "Dubizzle", f.publish_dubizzle)}</div>
+        <span class="text-muted" style="font-size:11px">Tick the portals this listing should appear on, then use “Publish” on the listings screen. Bayut and Dubizzle share one feed.</span>
+      </div>
+      <div class="modal-actions"><span class="form-msg" id="listingmsg">${esc(f.msg || "")}</span><button class="btn btn-secondary" id="listingcancel">Cancel</button><button class="btn btn-primary" id="listingsave">${f.id ? "Save changes" : "Save listing"}</button></div>
+    </div>
+  </div></div>`;
+}
+async function saveListing() {
+  const f = state.listingForm;
+  const g = (id) => { const el = document.getElementById(id); return el ? el.value : ""; };
+  const chk = (id) => { const el = document.getElementById(id); return !!(el && el.checked); };
+  const msg = document.getElementById("listingmsg");
+  const title = g("ls_title").trim();
+  if (title.length < 3) { msg.textContent = "Enter a listing title (at least 3 characters)."; return; }
+  const btn = document.getElementById("listingsave"); btn.disabled = true; btn.textContent = "Saving…";
+  const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
+  const arr = (v) => v.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+  const offering = g("ls_offering");
+  const rec = {
+    ref_no: g("ls_ref").trim() || null, offering_type: offering, property_type: g("ls_ptype"),
+    title, description: g("ls_desc").trim() || null, price: num(g("ls_price")),
+    rent_period: offering === "rent" ? g("ls_rentperiod") : null,
+    bedrooms: g("ls_beds") || null, bathrooms: g("ls_baths") || null, size_sqft: num(g("ls_size")),
+    city: g("ls_city").trim() || "Dubai", community: g("ls_community").trim() || null,
+    sub_community: g("ls_subcommunity").trim() || null, tower: g("ls_tower").trim() || null,
+    furnishing: g("ls_furnishing"), amenities: arr(g("ls_amenities")), photos: arr(g("ls_photos")),
+    permit_number: g("ls_permit").trim() || null, permit_qr_url: g("ls_permitqr").trim() || null,
+    dtcm_permit: g("ls_dtcm").trim() || null, agent_name: g("ls_agent") || null,
+    publish_pf: chk("ls_pf"), publish_bayut: chk("ls_bayut"), publish_dubizzle: chk("ls_dubizzle"),
+  };
+  let error;
+  if (f.id) ({ error } = await supabase.from("listings").update(rec).eq("id", f.id));
+  else ({ error } = await supabase.from("listings").insert([rec]));
+  if (error) { msg.textContent = error.message; btn.disabled = false; btn.textContent = f.id ? "Save changes" : "Save listing"; return; }
+  if (!await reloadAfterWrite(reloadListings, "Listing")) return;
+  state.listingForm = null; render();
+}
+async function setListingPublished(id, publish) {
+  const l = state.listings.find((x) => x.id === id);
+  if (!l) return;
+  if (publish && !(l.permit_number && String(l.permit_number).trim())) {
+    window.alert("Add a DLD Trakheesi permit number before publishing this listing."); return;
+  }
+  const patch = publish ? { status: "published", published_at: new Date().toISOString() } : { status: "draft" };
+  const { error } = await supabase.from("listings").update(patch).eq("id", id);
+  if (error) { window.alert("Could not update listing: " + error.message); return; }
+  if (!await reloadAfterWrite(reloadListings, "Listing")) return;
+  render();
+}
+async function deleteListing(id) {
+  const l = state.listings.find((x) => x.id === id);
+  if (!l || !window.confirm(`Delete listing "${l.title || l.ref_no || id}"?`)) return;
+  const { error } = await supabase.from("listings").delete().eq("id", id);
+  if (error) { window.alert("Could not delete: " + error.message); return; }
+  if (!await reloadAfterWrite(reloadListings, "Listing deletion")) return;
+  render();
+}
 // After a contract is saved, keep landlord + tenant in the contacts directory
 // (best-effort; ignores duplicates and permission failures silently).
 async function syncContractContacts(contract) {
@@ -3688,6 +3864,24 @@ function wireScreen() {
     state.contactQuery = contactq.value;
     const main = root.querySelector("main"); main.innerHTML = viewContacts(); wireScreen();
     const el = document.getElementById("contactq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
+  };
+  // listings
+  const newListing = document.getElementById("newlisting"); if (newListing) newListing.onclick = () => { state.listingForm = emptyListingForm(); render(); };
+  root.querySelectorAll("[data-editlisting]").forEach((b) => b.onclick = () => {
+    const l = state.listings.find((x) => x.id === b.dataset.editlisting);
+    if (l) { state.listingForm = listingFormFromRow(l); render(); }
+  });
+  root.querySelectorAll("[data-publisting]").forEach((b) => b.onclick = () => setListingPublished(b.dataset.publisting, true));
+  root.querySelectorAll("[data-unpublisting]").forEach((b) => b.onclick = () => setListingPublished(b.dataset.unpublisting, false));
+  root.querySelectorAll("[data-dellisting]").forEach((b) => b.onclick = () => deleteListing(b.dataset.dellisting));
+  const listingClose = document.getElementById("listingclose"); if (listingClose) listingClose.onclick = () => { state.listingForm = null; render(); };
+  const listingCancel = document.getElementById("listingcancel"); if (listingCancel) listingCancel.onclick = () => { state.listingForm = null; render(); };
+  const listingSave = document.getElementById("listingsave"); if (listingSave) listingSave.onclick = saveListing;
+  const listingq = document.getElementById("listingq");
+  if (listingq) listingq.oninput = () => {
+    state.listingQuery = listingq.value;
+    const main = root.querySelector("main"); main.innerHTML = viewListings(); wireScreen();
+    const el = document.getElementById("listingq"); el.focus(); el.setSelectionRange(el.value.length, el.value.length);
   };
   // cash & bank
   const newCm = document.getElementById("newcm"); if (newCm) newCm.onclick = () => { state.cashMoveForm = emptyCashMoveForm(); render(); };

@@ -279,6 +279,45 @@ create table if not exists kyc_forms (
 );
 create index if not exists kyc_contact_idx on kyc_forms(contact_id);
 
+-- ── property listings — portal syndication (Property Finder / Bayut / Dubizzle) ──
+-- Admin/owner create listings and toggle each portal on/off. A DLD Trakheesi
+-- permit is legally required before a listing may be published to any portal, so
+-- the public XML feeds only include rows that are status='published', have the
+-- portal toggle on, AND carry a permit_number. amenities/photos are jsonb arrays.
+create table if not exists listings (
+  id               uuid primary key default gen_random_uuid(),
+  ref_no           text,
+  status           text not null default 'draft',   -- draft | published | archived
+  offering_type    text default 'sale',             -- sale | rent
+  property_type    text,                            -- Apartment, Villa, Townhouse, Office, ...
+  title            text,
+  description      text,
+  price            numeric,
+  rent_period      text,                            -- yearly | monthly (rent only)
+  bedrooms         text,                            -- 'Studio' | '1' | '2' ...
+  bathrooms        text,
+  size_sqft        numeric,
+  city             text default 'Dubai',
+  community        text,
+  sub_community    text,
+  tower            text,
+  furnishing       text,                            -- furnished | unfurnished | partly
+  amenities        jsonb default '[]'::jsonb,
+  photos           jsonb default '[]'::jsonb,        -- array of public image URLs
+  permit_number    text,                            -- DLD Trakheesi advertising permit
+  permit_qr_url    text,                            -- Madmoun QR image URL
+  dtcm_permit      text,                            -- DTCM/DET permit (short-term rentals)
+  agent_name       text,
+  publish_pf       boolean default false,
+  publish_bayut    boolean default false,
+  publish_dubizzle boolean default false,
+  published_at     timestamptz,
+  created_by       uuid references users(id) on delete set null,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+create index if not exists listings_status_idx on listings(status);
+
 -- ── document number sequences (server-assigned) ─────────────────────────
 create sequence if not exists contract_no_seq;
 create sequence if not exists invoice_no_seq;
