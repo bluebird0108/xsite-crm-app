@@ -1448,8 +1448,9 @@ function dealAutoMath() {
   collectDealForm();
   const f = state.dealForm;
   // Commission is derived from the rent/sale price and the property-use rate
-  // (Residential 5%, Commercial 10%), with 5% VAT added on top. All fields stay
-  // editable afterwards. Received defaults to the full total (adjust when partial).
+  // (Residential 5%, Commercial 10%): price × rate IS the VAT-inclusive total, with
+  // VAT extracted out (total / 21), not added on top. All fields stay editable
+  // afterwards. Received defaults to the full total (adjust when partial).
   const rate = f.property_use === "Commercial" ? 10 : 5;
   const calculated = calculateDealCommissionFromRate(f.price, rate, !!f.agent2.trim());
   if (calculated) {
@@ -3380,8 +3381,9 @@ function collectCeForm() {
 function ceAutoMath() {
   collectCeForm();
   const f = state.ceForm;
-  // Same rate-based model as the deal form: price × rate (Residential 5% /
-  // Commercial 10%) + 5% VAT on top. Received defaults to the full total.
+  // Same rate-based model as the deal form: annual value × rate (Residential 5% /
+  // Commercial 10%) IS the VAT-inclusive total; VAT is extracted out (total / 21),
+  // not added on top. Received defaults to the full total.
   const rate = f.property_use === "Commercial" ? 10 : 5;
   const calc = calculateDealCommissionFromRate(f.annual_value, rate, !!String(f.agent2).trim());
   if (!calc) return;
