@@ -1125,14 +1125,17 @@ function viewDashboard() {
   const tiers = expiryTiers();
   const expiringSoon = tiers.slice(1).reduce((s, t) => s + t.items.length, 0);
   const kicker = p.role === "owner" ? "Owner / Overview" : p.role === "accounts" ? "Accounts workspace" : p.role === "manager" ? "Manager workspace" : "Admin workspace";
+  // Admin is an operational role (contracts / requests / staff) and must not see any
+  // financial figures on the dashboard — only counts. Money widgets are gated on this.
+  const canSeeMoney = roleIn("owner", "accounts", "manager");
   const kpis = `
   <section class="md-kpi-grid">
     <div class="md-kpi is-accent"><span class="card-kicker">Deals this month</span><span class="md-kpi-value">${deals.length}</span><span class="md-kpi-detail">${monthLabel(state.txMonth)} register</span></div>
-    <div class="md-kpi"><span class="card-kicker">Commission received</span><span class="md-kpi-value">${money(Math.round(received))}</span><span class="md-kpi-detail">Collected to date</span></div>
-    <div class="md-kpi"><span class="card-kicker">Avg. per deal</span><span class="md-kpi-value">${money(avgPerDeal)}</span><span class="md-kpi-detail">Total commission ÷ deals</span></div>
+    ${canSeeMoney ? `<div class="md-kpi"><span class="card-kicker">Commission received</span><span class="md-kpi-value">${money(Math.round(received))}</span><span class="md-kpi-detail">Collected to date</span></div>
+    <div class="md-kpi"><span class="card-kicker">Avg. per deal</span><span class="md-kpi-value">${money(avgPerDeal)}</span><span class="md-kpi-detail">Total commission ÷ deals</span></div>` : ""}
     <div class="md-kpi"><span class="card-kicker">Expiring ≤90 days</span><span class="md-kpi-value">${expiringSoon}</span><span class="md-kpi-detail">${tiers[0].items.length} already expired</span></div>
   </section>`;
-  const collectPanel = roleIn("owner", "accounts", "admin", "manager") ? `
+  const collectPanel = canSeeMoney ? `
     <div class="md-collect" role="group" aria-label="Commission collection rate">
       <div class="md-collect-top"><span class="card-kicker">Collection rate</span><span class="md-collect-pct">${collectRate}%</span></div>
       <div class="md-meter"><div class="md-meter-fill" style="width:${collectRate}%"></div></div>
@@ -1189,7 +1192,7 @@ function viewDashboard() {
       <div class="md-section-header"><h3>Today's business progress</h3><span class="text-muted" style="font-size:11px">${showDate(todayIso())}</span></div>
       <div class="md-kpi-grid" style="margin-bottom:16px">
         <div class="md-kpi"><span class="card-kicker">Contracts today</span><span class="md-kpi-value">${daily.contractsToday.length}</span></div>
-        <div class="md-kpi"><span class="card-kicker">Receipts today</span><span class="md-kpi-value">${daily.receiptsToday.length}</span><span class="md-kpi-detail">${money(Math.round(daily.receiptCash))} received</span></div>
+        <div class="md-kpi"><span class="card-kicker">Receipts today</span><span class="md-kpi-value">${daily.receiptsToday.length}</span>${canSeeMoney ? `<span class="md-kpi-detail">${money(Math.round(daily.receiptCash))} received</span>` : ""}</div>
         <div class="md-kpi"><span class="card-kicker">Invoices today</span><span class="md-kpi-value">${daily.invoicesToday.length}</span></div>
         <div class="md-kpi"><span class="card-kicker">New contacts today</span><span class="md-kpi-value">${daily.contactsToday.length}</span><span class="md-kpi-detail">${state.contacts.length} total</span></div>
       </div>
