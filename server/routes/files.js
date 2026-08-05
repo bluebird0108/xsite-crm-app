@@ -10,11 +10,11 @@ const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const { authMiddleware, need } = require("../auth");
 const { q } = require("../db");
+const { isAllowedDocumentKey } = require("../storage-policy");
 
 const FILES_DIR = process.env.FILES_DIR || "/var/www/crm-files";
 const SECRET = process.env.JWT_SECRET;
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
-const KEY_RE = /^(?:[0-9a-f-]{36}|submissions\/[0-9a-f-]{36})\/[0-9a-f-]{36}-[^/]{1,120}$/i;
 const ALLOWED_EXT = new Set([".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".doc", ".docx", ".xls", ".xlsx", ".csv"]);
 
 // Resolve a client-supplied storage key to a safe absolute path inside FILES_DIR.
@@ -30,7 +30,7 @@ router.post("/upload", authMiddleware, upload.single("file"), (req, res) => {
   if (!need(req.user, ["owner", "admin", "manager", "accounts", "agent"])) return res.status(403).json({ error: "Not authorized" });
   const key = req.body.path;
   if (!key || !req.file) return res.status(400).json({ error: "Missing path or file" });
-  if (!KEY_RE.test(key) || !ALLOWED_EXT.has(path.extname(req.file.originalname).toLowerCase()))
+  if (!isAllowedDocumentKey(key) || !ALLOWED_EXT.has(path.extname(req.file.originalname).toLowerCase()))
     return res.status(400).json({ error: "Unsupported document path or file type" });
   const abs = resolveSafe(key);
   if (!abs) return res.status(400).json({ error: "Invalid path" });

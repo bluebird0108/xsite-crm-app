@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { sanitizeWrite, hasKnownFilter } = require("../write-policy");
 const { rateLimit, resetRateLimits } = require("../rate-limit");
+const { isAllowedDocumentKey } = require("../storage-policy");
 
 test("profile fields cannot pass through the generic update endpoint", () => {
   assert.throws(() => sanitizeWrite("profiles", "update", "admin", { role: "owner" }), /cannot be updated/);
@@ -38,4 +39,14 @@ test("rate limiter blocks requests over the configured maximum", () => {
   middleware({}, makeRes(), () => { passed += 1; });
   assert.equal(passed, 2);
   assert.deepEqual(statuses, [429]);
+});
+
+test("document storage accepts categorized UUID paths only", () => {
+  const id = "123e4567-e89b-42d3-a456-426614174000";
+  const file = "123e4567-e89b-42d3-a456-426614174001-contract.pdf";
+  assert.equal(isAllowedDocumentKey(`contracts/${id}/${file}`), true);
+  assert.equal(isAllowedDocumentKey(`invoices-receipts/submissions/${id}/${file}`), true);
+  assert.equal(isAllowedDocumentKey(`kyc-and-ids/${id}/${file}`), true);
+  assert.equal(isAllowedDocumentKey(`../../root/${file}`), false);
+  assert.equal(isAllowedDocumentKey(`${id}/${file}`), false);
 });

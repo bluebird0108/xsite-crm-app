@@ -3193,9 +3193,23 @@ const DOC_TYPES = [
   ["cheque", "Cheque copy"],
   ["owner_docs", "Owner documents (ID / passport / title deed)"],
   ["tenant_docs", "Tenant documents (ID / passport / visa)"],
+  ["invoice_receipt", "Invoice / receipt"],
+  ["commission_statement", "Commission statement"],
+  ["utility", "DEWA / utility document"],
+  ["legal", "Legal document / NOC / POA"],
   ["other", "Other"],
 ];
 const docTypeLabel = (t) => (DOC_TYPES.find(([k]) => k === t) || [null, t])[1];
+const docStorageCategory = (t) => ({
+  signed_contract: "contracts",
+  cheque: "invoices-receipts",
+  owner_docs: "kyc-and-ids",
+  tenant_docs: "kyc-and-ids",
+  invoice_receipt: "invoices-receipts",
+  commission_statement: "commission-statements",
+  utility: "utilities",
+  legal: "legal",
+}[t] || "other");
 const fileCount = (contractId) => {
   const sub = state.submissions.find((x) => x.contract_id === contractId);
   return state.contractFiles.filter((f) => f.contract_id === contractId || (sub && f.submission_id === sub.id))
@@ -3262,7 +3276,7 @@ async function uploadContractFile() {
   const contractId = state.filesFor.contractId;
   const docType = document.getElementById("fu_type").value;
   const safeName = file.name.replace(/[^\w.\- ]+/g, "_").slice(-120);
-  const path = `${contractId}/${crypto.randomUUID()}-${safeName}`;
+  const path = `${docStorageCategory(docType)}/${contractId}/${crypto.randomUUID()}-${safeName}`;
   const up = await supabase.storage.from("documents").upload(path, file, { upsert: false, contentType: file.type || undefined });
   if (up.error) { msg.textContent = "Upload failed: " + up.error.message; btn.disabled = false; btn.textContent = "Upload"; return; }
   const ins = await supabase.from("contract_files").insert({
@@ -3456,12 +3470,13 @@ async function uploadSubmissionFile() {
   if (file.size > 25 * 1024 * 1024) { msg.textContent = "File is larger than 25 MB."; return; }
   const btn = document.getElementById("sbf_upload"); btn.disabled = true; btn.textContent = "Uploading…";
   const subId = state.subForm.savedId;
+  const docType = document.getElementById("sbf_type").value;
   const safeName = file.name.replace(/[^\w.\- ]+/g, "_").slice(-120);
-  const path = `submissions/${subId}/${crypto.randomUUID()}-${safeName}`;
+  const path = `${docStorageCategory(docType)}/submissions/${subId}/${crypto.randomUUID()}-${safeName}`;
   const up = await supabase.storage.from("documents").upload(path, file, { contentType: file.type || undefined });
   if (up.error) { msg.textContent = "Upload failed: " + up.error.message; btn.disabled = false; btn.textContent = "Upload"; return; }
   const ins = await supabase.from("contract_files").insert({
-    submission_id: subId, doc_type: document.getElementById("sbf_type").value, file_name: file.name,
+    submission_id: subId, doc_type: docType, file_name: file.name,
     storage_path: path, size_bytes: file.size, uploaded_by_name: state.profile.full_name || state.profile.email,
   });
   if (ins.error) {

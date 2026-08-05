@@ -6,8 +6,11 @@ Production is self-hosted on the ShaaiLab VPS.
 - API working directory: `/var/www/crm/server`
 - API service: `xsite-api.service` on `127.0.0.1:8787`
 - PostgreSQL database: configured by `server/.env`
-- Private CRM uploads: `/var/www/crm-files`
-- Public listing media: `/var/www/crm-listing-media`
+- Canonical data store: `/root/xsite data`
+- Private CRM upload bind mounts: `/var/www/crm-files/*` map into categorized
+  `crm-uploads/` folders below `/root/xsite data`
+- Public listing media bind mount: `/var/www/crm-listing-media` maps to
+  `/root/xsite data/media/listings`
 - Nginx site: `/etc/nginx/sites-available/crm.shaailab.com`
 - Backups: `xsite-crm-backup.timer` writes root-only snapshots to `/var/backups/xsite-crm`
 
