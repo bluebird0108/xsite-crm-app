@@ -235,6 +235,10 @@ create table if not exists account_tasks (
   completed_at timestamptz,
   created_at   timestamptz not null default now()
 );
+-- A contract can only have one open Accounts hand-off at a time. Completed
+-- tasks remain as history and do not block a later re-issued task.
+create unique index if not exists account_tasks_one_pending_per_contract
+  on account_tasks(contract_id) where status = 'pending';
 
 create table if not exists contacts (
   id           uuid primary key default gen_random_uuid(),
@@ -279,7 +283,11 @@ create table if not exists kyc_forms (
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
-create index if not exists kyc_contact_idx on kyc_forms(contact_id);
+-- The UI treats KYC as one evolving record per contact (draft -> complete).
+-- Enforce that invariant in the database so double-clicks/concurrent saves
+-- cannot produce a second KYC row for the same person.
+create unique index if not exists kyc_contact_unique
+  on kyc_forms(contact_id) where contact_id is not null;
 
 -- ── property listings — portal syndication (Property Finder / Bayut / Dubizzle) ──
 -- Admin/owner create listings and toggle each portal on/off. A DLD Trakheesi
