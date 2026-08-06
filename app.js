@@ -1338,12 +1338,19 @@ function viewDashboard() {
         : `<div class="md-empty" style="border:0">No matches.</div>`}</div>` : ""}
     </div>`;
 
+  // Month switcher on the dashboard itself, so June and July can be viewed
+  // separately here (shares state.txMonth with the Transactions register).
+  const dmonths = availableMonths(state.deals, "month");
+  const dashMonthTabs = dmonths.length > 1
+    ? `<div class="tabs" style="margin:0 0 16px;flex-wrap:wrap" role="tablist" aria-label="Dashboard month">${dmonths.map((m) => `<button class="tab ${state.txMonth === m ? "is-active" : ""}" data-dashmonth="${m}">${monthLabel(m)}</button>`).join("")}</div>`
+    : "";
   return `
   <div class="md-dashboard">
     <header class="md-dashboard-header has-collect">
       <div><span class="card-kicker">${esc(kicker)}</span><h1 style="margin-top:4px">${monthLabel(state.txMonth)} Overview</h1><p class="text-muted" style="margin:0">Live from the Xsite database.</p></div>
       ${collectPanel}
     </header>
+    ${dashMonthTabs}
     ${kpis}
     ${strip}
     ${searchBox}
@@ -4054,6 +4061,7 @@ function wireScreen() {
   if (txq) txq.oninput = () => { state.txQuery = txq.value; rerenderTx(); };
   root.querySelectorAll("[data-txtype]").forEach((b) => b.onclick = () => { state.txType = b.dataset.txtype; rerenderTx(); });
   root.querySelectorAll("[data-txmonth]").forEach((b) => b.onclick = () => { state.txMonth = b.dataset.txmonth; rerenderTx(); });
+  root.querySelectorAll("[data-dashmonth]").forEach((b) => b.onclick = () => { state.txMonth = b.dataset.dashmonth; const m = root.querySelector("main"); m.innerHTML = viewDashboard(); wireScreen(); });
   root.querySelectorAll("[data-ledgermonth]").forEach((b) => b.onclick = () => { state.ledgerMonth = b.dataset.ledgermonth; rerenderLedgers(); });
   root.querySelectorAll("[data-ledgerteam]").forEach((b) => b.onclick = () => { state.ledgerTeam = b.dataset.ledgerteam; rerenderLedgers(); });
   const lq = document.getElementById("lq");
