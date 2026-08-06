@@ -1237,11 +1237,21 @@ function viewDashboard() {
   // Only owner and accounts may see money. Admin and manager are operational roles
   // (contracts / requests / staff) and see counts only. Money widgets gate on this.
   const canSeeMoney = roleIn("owner", "accounts");
+  // Top three agents by commission received for the selected month.
+  const topAgents = (() => {
+    const by = {};
+    state.commission.forEach((r) => { if (r.agent_name && (!state.txMonth || r.month === state.txMonth)) by[r.agent_name] = (by[r.agent_name] || 0) + (+r.received || 0); });
+    return Object.entries(by).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  })();
+  const topAgentsTile = `<div class="md-kpi"><span class="card-kicker">Top agents · ${monthLabel(state.txMonth)}</span>
+    <div style="display:flex;flex-direction:column;gap:7px;margin-top:8px">${topAgents.length
+      ? topAgents.map(([n, amt], i) => `<div style="display:flex;align-items:center;gap:8px;font-size:13px;line-height:1.2"><span style="font-weight:800;color:var(--color-accent);min-width:14px">${i + 1}</span><span style="font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(n)}">${esc(shortName(n))}</span><span style="font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap">${money(Math.round(amt))}</span></div>`).join("")
+      : `<span class="text-muted" style="font-size:12px">No commission yet</span>`}</div></div>`;
   const kpis = `
   <section class="md-kpi-grid">
     <div class="md-kpi is-accent"><span class="card-kicker">Deals this month</span><span class="md-kpi-value">${deals.length}</span><span class="md-kpi-detail">${monthLabel(state.txMonth)} register</span></div>
     ${canSeeMoney ? `<div class="md-kpi"><span class="card-kicker">Commission received</span><span class="md-kpi-value">${money(Math.round(received))}</span><span class="md-kpi-detail">Collected to date</span></div>
-    <div class="md-kpi"><span class="card-kicker">Avg. per deal</span><span class="md-kpi-value">${money(avgPerDeal)}</span><span class="md-kpi-detail">Total commission ÷ deals</span></div>` : ""}
+    ${topAgentsTile}` : ""}
     <div class="md-kpi"><span class="card-kicker">Expiring ≤90 days</span><span class="md-kpi-value">${expiringSoon}</span><span class="md-kpi-detail">${tiers[0].items.length} already expired</span></div>
   </section>`;
   const collectPanel = canSeeMoney ? `
@@ -1254,21 +1264,22 @@ function viewDashboard() {
         <div class="lg-out"><span class="lg-label">Outstanding</span><strong>${money(Math.round(outstanding))}</strong></div>
       </div>
     </div>` : "";
-  const cashDates = availableDates(state.cash, "as_at");
-  const cashRows = state.cash.filter((c) => c.as_at === state.cashDate);
-  const isLatestCash = state.cashDate === cashDates[0];
-  const cashDateOpts = cashDates.map((d) =>
-    `<option value="${d}" ${d === state.cashDate ? "selected" : ""}>${showDate(d)}${d === cashDates[0] ? " (latest)" : ""}</option>`).join("");
+  // Cash follows the dashboard month: show the snapshot recorded for the month
+  // being viewed (latest one within that month), so June and July each show
+  // their own actual figures — or a note when a month has no cash recorded yet.
+  const cashAsAt = availableDates(state.cash, "as_at").find((d) => (d || "").slice(0, 7) === state.txMonth) || null;
+  const cashRows = cashAsAt ? state.cash.filter((c) => c.as_at === cashAsAt) : [];
   const cashCard = roleIn("owner", "accounts") ? `
     <section class="md-section">
       <div class="md-section-header"><h3>Cash position</h3>
         <span style="display:flex;gap:8px;align-items:center">
-          ${cashDates.length > 1 ? `<select class="input" id="cashdate" style="padding:5px 8px;font-size:12px;width:auto">${cashDateOpts}</select>` : `<span class="text-muted" style="font-size:11px">As at ${showDate(state.cashDate)}</span>`}
-          ${roleIn("owner", "accounts") ? `<button class="btn btn-secondary btn-mini" id="cashedit">Update cash</button>` : ""}
+          ${cashAsAt ? `<span class="text-muted" style="font-size:11px">As at ${showDate(cashAsAt)}</span>` : ""}
+          <button class="btn btn-secondary btn-mini" id="cashedit">Update cash</button>
         </span>
       </div>
-      ${!isLatestCash ? `<p class="text-muted" style="font-size:11px;margin:0 0 8px">Historical snapshot — latest is ${showDate(cashDates[0])}.</p>` : ""}
-      ${cashRows.map((c) => `<div class="cash-row ${/remaining/i.test(c.label) ? "is-remaining" : /total/i.test(c.label) ? "is-total" : ""}"><span>${esc(c.label)}</span><strong>${money(c.amount)}</strong></div>`).join("")}
+      ${cashRows.length
+        ? cashRows.map((c) => `<div class="cash-row ${/remaining/i.test(c.label) ? "is-remaining" : /total/i.test(c.label) ? "is-total" : ""}"><span>${esc(c.label)}</span><strong>${money(c.amount)}</strong></div>`).join("")
+        : `<p class="text-muted" style="font-size:12px;margin:8px 0 0">No cash recorded for ${monthLabel(state.txMonth)} yet.</p>`}
     </section>` : "";
   const sevClass = ["crit", "warn", "watch", "watch"];
   const expiryCard = `
