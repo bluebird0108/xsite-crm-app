@@ -2356,7 +2356,14 @@ function allLedgerNames() {
 }
 function ledgerAgentNames() {
   if (state.profile.role === "agent") return state.profile.agent_name ? [state.profile.agent_name] : [];
-  return allLedgerNames();
+  // The commission ledger lists only agents who actually have commission entries —
+  // no staff-roster padding. That way one person never appears twice (once under
+  // the canonical commission name and again under a fuller staff legal name), and
+  // spelling variants that whole-word suppression can't catch (e.g. "SHERAZ NAEM"
+  // vs staff "SHERAZ NAEEM MUHAMMAD NAEEM") no longer produce a duplicate row.
+  const set = new Set();
+  state.commission.forEach((r) => { if (r.agent_name) set.add(normName(r.agent_name)); });
+  return [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
 function viewLedgers() {
   const teamFor = (name) => (state.staff.find((x) => (x.name || "").toUpperCase() === (name || "").toUpperCase()) || {}).team || null;
