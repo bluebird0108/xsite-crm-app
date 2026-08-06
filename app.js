@@ -2444,7 +2444,7 @@ function viewLedgers() {
         ${teamTabs}
         ${list || `<div class="md-empty">No agents.</div>`}
       </aside>
-      <div style="min-width:0">${teamBand}${sheet}</div>
+      <div style="min-width:0" id="ledgerstmt">${teamBand}${sheet}</div>
     </div>
   </div>`;
 }
@@ -4066,7 +4066,20 @@ function wireScreen() {
   root.querySelectorAll("[data-ledgerteam]").forEach((b) => b.onclick = () => { state.ledgerTeam = b.dataset.ledgerteam; rerenderLedgers(); });
   const lq = document.getElementById("lq");
   if (lq) lq.oninput = () => { state.ledgerQuery = lq.value; rerenderLedgers(); };
-  root.querySelectorAll("[data-agent]").forEach((b) => b.onclick = () => { state.selectedAgent = b.dataset.agent; rerenderLedgers(); });
+  root.querySelectorAll("[data-agent]").forEach((b) => b.onclick = () => {
+    state.selectedAgent = b.dataset.agent;
+    // Preserve the agent list's own scroll position across the re-render so the
+    // agent you just clicked (e.g. the last one) stays where it was instead of
+    // the list jumping back to the top.
+    const keep = (root.querySelector(".ledger-panel") || {}).scrollTop || 0;
+    rerenderLedgers();
+    const panel = root.querySelector(".ledger-panel"); if (panel) panel.scrollTop = keep;
+    // On the stacked (mobile) layout the statement sits below the tall list, so
+    // bring the opened ledger into view; on desktop it's already beside the list
+    // (near the top) and this leaves the page put.
+    const stmt = document.getElementById("ledgerstmt");
+    if (stmt && stmt.getBoundingClientRect().top > window.innerHeight * 0.6) stmt.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
   root.querySelectorAll("[data-save]").forEach((b) => b.onclick = () => saveTeamRow(b.closest("tr")));
   root.querySelectorAll("[data-resetpw]").forEach((b) => b.onclick = () => flagPasswordReset(b.dataset.resetpw));
   root.querySelectorAll("[data-removemember]").forEach((b) => b.onclick = () => removeMember(b.dataset.removemember));
