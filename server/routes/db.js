@@ -74,9 +74,14 @@ function agentScope(table, user, startIdx) {
 }
 
 router.use("/:table", (req, res, next) => {
-  if (req.user.role === "pending") return res.status(403).json({ error: "Your account is awaiting approval." });
   const table = req.params.table;
   if (!POLICY[table] || !COLS[table]) return res.status(404).json({ error: "Unknown table" });
+  // Pending members still need to read their own profile so the client can
+  // render the awaiting-approval workspace. Every other table and every write
+  // remains blocked until an owner/admin assigns a role.
+  const pendingSelfProfileRead = req.user.role === "pending" && req.method === "GET" && table === "profiles";
+  if (req.user.role === "pending" && !pendingSelfProfileRead)
+    return res.status(403).json({ error: "Your account is awaiting approval." });
   next();
 });
 
@@ -85,7 +90,7 @@ router.get("/:table", async (req, res) => {
   const table = req.params.table;
   const p = POLICY[table];
   const u = req.user;
-  const canRead = has(u, p.read) || (p.selfRead && u.role !== "pending");
+  const canRead = has(u, p.read) || p.selfRead;
   const scoped = u.role === "agent" && (p.scope || p.agentSql);
   if (!canRead && !scoped) return res.status(403).json({ error: "Not authorized" });
 

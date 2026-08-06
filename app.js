@@ -1105,7 +1105,13 @@ function viewTeam() {
   const isOwner = roleIn("owner");
   // Deleting an account and forcing a password reset are owner+admin only.
   const canManageAuth = roleIn("owner", "admin");
-  const agentNames = allLedgerNames();
+  // Preserve every ledger name already linked to a login. Some zero-business
+  // agents use a short operational name while Staff stores their full legal
+  // name, so allLedgerNames() alone cannot always reconstruct the saved value.
+  const agentNames = [...new Set([
+    ...allLedgerNames(),
+    ...state.team.map((member) => normName(member.agent_name)).filter(Boolean),
+  ])].sort((a, b) => a.localeCompare(b));
   const assignable = isOwner ? ["pending", "agent", "accounts", "admin", "manager", "owner"] : ["pending", "agent", "accounts", "admin", "manager"];
   const roleOpts = (cur) => (assignable.includes(cur) ? assignable : [...assignable, cur])
     .map((r) => `<option value="${r}" ${r === cur ? "selected" : ""}>${r}</option>`).join("");
