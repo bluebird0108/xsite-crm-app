@@ -2456,7 +2456,7 @@ function viewLedgerStatement() {
   return `<div class="ls-shell" role="dialog" aria-modal="true" aria-label="Commission statement" tabindex="-1">
     <div class="contract-print-toolbar ls-toolbar">
       <div><strong>Commission Statement</strong><div>${esc(state.selectedAgent)} · ${monthLabel(state.ledgerMonth)}</div></div>
-      <div><button class="btn btn-secondary" id="lsclose">Back</button> <button class="btn btn-secondary" id="lscsv">Download CSV</button> <button class="btn btn-primary" id="lsprint">Print / Save PDF</button></div>
+      <div><button class="btn btn-secondary" id="lsclose">Back</button> ${roleIn("owner", "accounts") ? `<button class="btn btn-secondary" id="lsemail">Email agent</button> ` : ""}<button class="btn btn-secondary" id="lscsv">Download CSV</button> <button class="btn btn-primary" id="lsprint">Print / Save PDF</button></div>
     </div>
     <div class="ls-sheet">
       <div class="ls-head"><img class="ls-logo" src="./xsite-logo.png" alt="Xsite"></div>
@@ -2519,6 +2519,41 @@ function downloadStatementCsv() {
     ["Commission Received", "received"], ["VAT@5%", "vat"], ["Commission Exclusive Of VAT", "commission_ex_vat"],
     ["Agent Business", "agent_business"], ["Xsite Share@50%", "xsite_share"], ["Agent Share@50%", "agent_share"],
   ]);
+}
+
+// Open the accounts user's own mail app (mailto) prefilled to the agent, with a
+// statement summary in the body. No SMTP on this app — the user attaches the
+// downloaded PDF/CSV and sends. Email is looked up from the agent's login profile.
+async function emailAgentStatement() {
+  const agent = state.selectedAgent;
+  if (!agent) return;
+  const rows = state.commission.filter((r) => sameAgent(r.agent_name, agent) && (!state.ledgerMonth || r.month === state.ledgerMonth));
+  const sum = (k) => rows.reduce((s, r) => s + (+r[k] || 0), 0);
+  const monthTxt = monthLabel(state.ledgerMonth);
+  let email = "";
+  try {
+    const res = await supabase.rpc("agent_email", { p_agent_name: agent });
+    if (!res.error && res.data) email = String(res.data);
+  } catch { /* fall through to manual entry */ }
+  if (!email) {
+    email = (window.prompt(`No email on file for ${agent}. Enter their email address to continue:`, "") || "").trim();
+    if (!email) return;
+  }
+  const aed = (v) => "AED " + num2(v);
+  const subject = `Your Xsite commission statement — ${monthTxt}`;
+  const body = [
+    `Hi ${agent},`, "",
+    `Please find your commission statement for ${monthTxt}.`, "",
+    "Summary:",
+    `- Total commission received: ${aed(sum("received"))}`,
+    `- VAT (5%): ${aed(sum("vat"))}`,
+    `- Commission excl. VAT: ${aed(sum("commission_ex_vat"))}`,
+    `- Agent business: ${aed(sum("agent_business"))}`,
+    `- Agent share (50%): ${aed(sum("agent_share"))}`, "",
+    "The detailed statement is attached.", "",
+    "Xsite Real Estate Brokers",
+  ].join("\r\n");
+  window.location.href = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 function exportTransactions() {
@@ -4308,6 +4343,7 @@ function wireModals() {
   const sdClose = document.getElementById("sdclose"); if (sdClose) sdClose.onclick = () => { state.subView = null; render(); };
   const sdCancel = document.getElementById("sdcancel"); if (sdCancel) sdCancel.onclick = () => { state.subView = null; render(); };
   const lsClose = document.getElementById("lsclose"); if (lsClose) lsClose.onclick = () => { state.printLedger = false; render(); };
+  const lsEmail = document.getElementById("lsemail"); if (lsEmail) lsEmail.onclick = emailAgentStatement;
   const lsCsv = document.getElementById("lscsv"); if (lsCsv) lsCsv.onclick = downloadStatementCsv;
   const lsPrint = document.getElementById("lsprint"); if (lsPrint) lsPrint.onclick = () => window.print();
   const printClose = document.getElementById("printclose"); if (printClose) printClose.onclick = () => { state.printContract = null; render(); };

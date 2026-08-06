@@ -266,6 +266,18 @@ const HANDLERS = {
     await q("update profiles set role=$1, agent_name=$2 where id=$3", [p.p_role, p.p_role === "agent" ? p.p_agent_name : null, p.p_id]);
     return null;
   },
+  // Look up one agent's email by their ledger name so Accounts can email them a
+  // statement. Scoped to owner/accounts and returns only the single address (the
+  // generic profiles read is MANAGE-only, so this avoids exposing the whole table).
+  async agent_email(u, p) {
+    if (!need(u, MONEY)) throw err("Not authorized");
+    const name = String(p.p_agent_name || "").trim();
+    if (!name) return null;
+    const r = await q(
+      "select email from profiles where role='agent' and email is not null and email<>'' and lower(trim(agent_name))=lower($1) limit 1",
+      [name]);
+    return r.rows[0] ? r.rows[0].email : null;
+  },
   // Permanently delete an account (distinct from "Remove access", which only
   // returns it to pending). Relies on the FK design: profiles cascades, audit
   // refs set-null, and deal/ledger history is keyed by name so it is untouched.
