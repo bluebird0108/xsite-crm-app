@@ -8,7 +8,7 @@ const INSERT_COLUMNS = {
   cash_movements: ["movement_date", "direction", "channel", "bank_account", "agent_name", "client", "property", "amount", "reference", "month"],
   money_docs: ["doc_type", "deal_group", "doc_date", "client", "description", "amount", "payment_method", "status", "month", "details"],
   staff: ["name", "job", "nationality", "branch", "card_number", "card_expiry", "birthday", "team"],
-  agent_requests: ["submitter_name", "request_type", "subject", "deal_group", "details"],
+  agent_requests: ["submitter_name", "request_type", "subject", "deal_group", "details", "amount"],
   contacts: ["name", "contact_type", "phone", "email", "notes", "last_contact", "birthday"],
   kyc_forms: ["contact_id", "branch_ref", "status", "data"],
   listings: ["ref_no", "status", "offering_type", "property_type", "title", "description", "price", "rent_period", "bedrooms", "bathrooms", "size_sqft", "city", "community", "sub_community", "tower", "furnishing", "amenities", "photos", "permit_number", "permit_qr_url", "dtcm_permit", "agent_name", "publish_pf", "publish_bayut", "publish_dubizzle", "published_at"],

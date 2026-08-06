@@ -95,7 +95,7 @@ const COLUMNS = {
   profiles: "id,full_name,email,role,agent_name,created_at",
   money_docs: "id,doc_type,doc_no,deal_group,doc_date,client,description,amount,payment_method,status,month,details",
   staff: "id,name,job,nationality,branch,card_number,card_expiry,birthday,team",
-  agent_requests: "id,created_by,submitter_name,request_type,subject,deal_group,details,status,response,created_at,updated_at",
+  agent_requests: "id,created_by,submitter_name,request_type,subject,deal_group,details,status,response,amount,created_at,updated_at",
   contracts: "id,contract_no,deal_group,status,contract_date,start_date,end_date,landlord_name,tenant_name,owner_phone,tenant_phone,annual_rent,security_deposit,payment_mode,additional_terms,details,addendum,ejari_status,created_by,finalized_by,finalized_at,created_at,updated_at",
   account_tasks: "id,contract_id,task_type,status,money_doc_id,completed_by,completed_at,created_at",
   contacts: "id,name,contact_type,phone,email,notes,last_contact,birthday,created_by,created_at,updated_at",
@@ -733,6 +733,7 @@ function viewRequests() {
     </div>` : esc(request.response || "—");
     return `<tr>
       <td>${esc(date)}</td><td>${esc(request.submitter_name)}</td><td>${esc(requestTypeLabel(request.request_type))}</td>
+      <td class="numeric">${request.amount != null && request.amount !== "" ? money(request.amount) : "—"}</td>
       <td><strong>${esc(request.subject)}</strong><br><span class="text-muted" style="white-space:pre-wrap">${esc(request.details)}</span></td>
       <td>${esc(deal)}</td><td><span class="tag ${request.status === "pending" ? "tag-accent" : "tag-neutral"}">${esc(requestStatusLabel(request.status))}</span></td>
       <td>${action}</td>
@@ -745,9 +746,9 @@ function viewRequests() {
     </div>
     <div class="tx-toolbar"><div class="tabs">${tabs}</div><span class="text-muted" style="font-size:12px">${rows.length} requests</span></div>
     <div class="sheet"><div class="sheet-hint">Requests are private to the submitting agent and the operations team</div>
-      <div class="table-wrap"><table class="grid" style="min-width:1050px">
-        <thead><tr><th>Date</th><th>Submitted by</th><th>Type</th><th>Request</th><th>Related deal</th><th>Status</th><th>${canReview ? "Workflow / response" : "Response"}</th></tr></thead>
-        <tbody>${body || `<tr><td colspan="7"><div class="md-empty" style="border:0">No requests match this status.</div></td></tr>`}</tbody>
+      <div class="table-wrap"><table class="grid" style="min-width:1150px">
+        <thead><tr><th>Date</th><th>Submitted by</th><th>Type</th><th>Amount</th><th>Request</th><th>Related deal</th><th>Status</th><th>${canReview ? "Workflow / response" : "Response"}</th></tr></thead>
+        <tbody>${body || `<tr><td colspan="8"><div class="md-empty" style="border:0">No requests match this status.</div></td></tr>`}</tbody>
       </table></div>
     </div>
   </div>`;
@@ -769,6 +770,7 @@ function viewRequestModal() {
             <option value="leave_request">Leave request</option><option value="commission_payout">Commission payout</option><option value="other">Other</option>
           </select></div>
           <div class="field"><label for="r_deal">Related deal (optional)</label><input class="input" id="r_deal" list="requestdeals" placeholder="Type to search your deals"></div>
+          <div class="field"><label for="r_amount">Amount (AED) <span class="text-muted" style="font-weight:400">— for advances / payouts</span></label><input class="input" id="r_amount" type="number" min="0" step="0.01" placeholder="e.g. 2000"></div>
           <div class="field" style="grid-column:1/-1"><label for="r_subject">Subject</label><input class="input" id="r_subject" maxlength="160" placeholder="Short summary"></div>
           <div class="field" style="grid-column:1/-1"><label for="r_details">Details</label><textarea class="input" id="r_details" rows="6" maxlength="4000" placeholder="Explain exactly what needs attention"></textarea></div>
         </div>
@@ -783,13 +785,16 @@ async function saveRequest() {
   const dealLabel = document.getElementById("r_deal").value.trim();
   const subject = document.getElementById("r_subject").value.trim();
   const details = document.getElementById("r_details").value.trim();
+  const amountRaw = document.getElementById("r_amount").value.trim();
+  const amount = amountRaw === "" ? null : Number(amountRaw);
   const msg = document.getElementById("requestmsg");
   const deal = dealLabel ? dealGroupOptions().find((option) => option.label === dealLabel) : null;
   if (dealLabel && !deal) { msg.textContent = "Choose a related deal from the list, or leave it blank."; return; }
   if (subject.length < 3 || details.length < 3) { msg.textContent = "Subject and details must each be at least 3 characters."; return; }
+  if (amount !== null && (!Number.isFinite(amount) || amount < 0)) { msg.textContent = "Enter a valid amount, or leave it blank."; return; }
   const button = document.getElementById("requestsave"); button.disabled = true; button.textContent = "Submitting…";
   const result = await supabase.from("agent_requests").insert({
-    request_type: requestType, subject, details, deal_group: deal?.group || null,
+    request_type: requestType, subject, details, deal_group: deal?.group || null, amount,
   });
   if (result.error) { msg.textContent = result.error.message; button.disabled = false; button.textContent = "Submit request"; return; }
   if (!await reloadAfterWrite(reloadRequests, "Request")) return;

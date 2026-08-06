@@ -179,12 +179,18 @@ create table if not exists agent_requests (
   request_type  text,
   subject       text,
   deal_group    uuid references deal_groups(id) on delete set null,
-  details       jsonb,
+  details       text,
   status        text default 'pending',
   response      text,
+  amount        numeric,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
+-- details holds free text (the form sends a plain string), not JSON — a jsonb
+-- column rejected it ("invalid input syntax for type json"). amount carries the
+-- advance / payout figure shown as its own column on the Requests screen.
+alter table agent_requests alter column details type text using details::text;
+alter table agent_requests add column if not exists amount numeric;
 
 create table if not exists contracts (
   id              uuid primary key default gen_random_uuid(),
