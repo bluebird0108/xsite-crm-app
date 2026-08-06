@@ -2456,7 +2456,7 @@ function viewLedgerStatement() {
   return `<div class="ls-shell" role="dialog" aria-modal="true" aria-label="Commission statement" tabindex="-1">
     <div class="contract-print-toolbar ls-toolbar">
       <div><strong>Commission Statement</strong><div>${esc(state.selectedAgent)} · ${monthLabel(state.ledgerMonth)}</div></div>
-      <div><button class="btn btn-secondary" id="lsclose">Back</button> <button class="btn btn-primary" id="lsprint">Print / Save PDF</button></div>
+      <div><button class="btn btn-secondary" id="lsclose">Back</button> <button class="btn btn-secondary" id="lscsv">Download CSV</button> <button class="btn btn-primary" id="lsprint">Print / Save PDF</button></div>
     </div>
     <div class="ls-sheet">
       <div class="ls-head"><img class="ls-logo" src="./xsite-logo.png" alt="Xsite"></div>
@@ -2487,6 +2487,38 @@ function viewLedgerStatement() {
       </div>
     </div>
   </div>`;
+}
+
+// Download the on-screen commission statement as a CSV (same rows + totals the
+// printed sheet shows). Matches the statement's columns, not the raw ledger export.
+function downloadStatementCsv() {
+  const rows = state.commission.filter((r) => sameAgent(r.agent_name, state.selectedAgent) && (!state.ledgerMonth || r.month === state.ledgerMonth));
+  const sum = (k) => rows.reduce((s, r) => s + (+r[k] || 0), 0);
+  const mapped = rows.map((r, i) => ({
+    sno: i + 1,
+    date: showDate(r.entry_date, r.entry_date_raw),
+    third_party: r.third_party && r.third_party !== "N/A" ? r.third_party : "N/A",
+    agent2: r.agent2 && r.agent2 !== "N/A" ? r.agent2 : "",
+    deal_type: r.deal_type || "", unit: r.unit || "", building: r.building || "", area: r.area || "",
+    annual_value: r.annual_value, total_commission: r.total_commission, received: r.received,
+    vat: r.vat, commission_ex_vat: r.commission_ex_vat, agent_business: r.agent_business,
+    xsite_share: r.xsite_share, agent_share: r.agent_share,
+  }));
+  // Totals row (label in the Area column, mirroring the printed footer).
+  mapped.push({
+    sno: "", date: "", third_party: "", agent2: "", deal_type: "", unit: "", building: "", area: "TOTAL",
+    annual_value: sum("annual_value"), total_commission: sum("total_commission"), received: sum("received"),
+    vat: sum("vat"), commission_ex_vat: sum("commission_ex_vat"), agent_business: sum("agent_business"),
+    xsite_share: sum("xsite_share"), agent_share: sum("agent_share"),
+  });
+  const safeAgent = (state.selectedAgent || "agent").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  downloadCsv(`xsite-commission-${safeAgent}-${state.ledgerMonth || "all"}.csv`, mapped, [
+    ["S.No", "sno"], ["Date", "date"], ["Third Party", "third_party"], ["Agent 2", "agent2"],
+    ["Rent/Sale/Off Plan", "deal_type"], ["Unit No", "unit"], ["Building", "building"], ["Area", "area"],
+    ["Annual Rent/Sale Price", "annual_value"], ["Total Commission Including 3rd Party", "total_commission"],
+    ["Commission Received", "received"], ["VAT@5%", "vat"], ["Commission Exclusive Of VAT", "commission_ex_vat"],
+    ["Agent Business", "agent_business"], ["Xsite Share@50%", "xsite_share"], ["Agent Share@50%", "agent_share"],
+  ]);
 }
 
 function exportTransactions() {
@@ -4276,6 +4308,7 @@ function wireModals() {
   const sdClose = document.getElementById("sdclose"); if (sdClose) sdClose.onclick = () => { state.subView = null; render(); };
   const sdCancel = document.getElementById("sdcancel"); if (sdCancel) sdCancel.onclick = () => { state.subView = null; render(); };
   const lsClose = document.getElementById("lsclose"); if (lsClose) lsClose.onclick = () => { state.printLedger = false; render(); };
+  const lsCsv = document.getElementById("lscsv"); if (lsCsv) lsCsv.onclick = downloadStatementCsv;
   const lsPrint = document.getElementById("lsprint"); if (lsPrint) lsPrint.onclick = () => window.print();
   const printClose = document.getElementById("printclose"); if (printClose) printClose.onclick = () => { state.printContract = null; render(); };
   const printNow = document.getElementById("printnow"); if (printNow) printNow.onclick = async () => {
