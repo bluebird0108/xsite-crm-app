@@ -59,6 +59,8 @@ router.post("/change-password", authMiddleware, async (req, res) => {
   const pw = (req.body || {}).password;
   if (!validPassword(pw)) return res.status(400).json({ error: "Password must be between 8 and 128 characters." });
   const r = await q("update users set password_hash=$1, token_version=token_version+1 where id=$2 returning id,email,token_version", [await hash(pw), req.user.id]);
+  // Clear any owner/admin-set forced-reset flag now that they've chosen a new password.
+  await q("update profiles set must_reset_password=false where id=$1", [req.user.id]);
   return res.json({ ok: true, token: sign(r.rows[0]) });
 });
 

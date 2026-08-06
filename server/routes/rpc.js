@@ -10,6 +10,9 @@ const MONEY = ["owner", "accounts"];
 // "manager" mirrors "admin" for management actions (contracts, contacts, roles).
 // Cash updates stay MONEY-only, so manager (like admin) cannot touch cash.
 const MANAGE = ["owner", "admin", "manager"];
+// Deleting an account and forcing a password reset touch the login itself, so
+// they are owner+admin only — managers may reassign roles but not do these.
+const OWNER_ADMIN = ["owner", "admin"];
 const MONEY_REQUESTS = ["salary_advance", "commission_payout", "commission_query", "deal_correction"];
 const ym = (d) => (d ? String(d).slice(0, 7) : null);
 
@@ -261,6 +264,39 @@ const HANDLERS = {
       if (owners <= 1) throw err("Cannot remove the last owner");
     }
     await q("update profiles set role=$1, agent_name=$2 where id=$3", [p.p_role, p.p_role === "agent" ? p.p_agent_name : null, p.p_id]);
+    return null;
+  },
+  // Permanently delete an account (distinct from "Remove access", which only
+  // returns it to pending). Relies on the FK design: profiles cascades, audit
+  // refs set-null, and deal/ledger history is keyed by name so it is untouched.
+  async delete_member(u, p) {
+    if (!need(u, OWNER_ADMIN)) throw err("Only Owner or Admin can delete accounts");
+    if (!p.p_id) throw err("Member not found");
+    if (p.p_id === u.id) throw err("You cannot delete your own account");
+    const target = (await q("select role from profiles where id=$1", [p.p_id])).rows[0];
+    if (!target) throw err("Member not found");
+    if (u.role === "admin" && target.role === "owner") throw err("Only an owner can delete an owner account");
+    if (target.role === "owner") {
+      const owners = (await q("select count(*)::int n from profiles where role='owner'")).rows[0].n;
+      if (owners <= 1) throw err("Cannot delete the last owner");
+    }
+    await q("delete from users where id=$1", [p.p_id]);
+    return null;
+  },
+  // Force a member to set a new password at next login. Sets the flag AND bumps
+  // token_version so their current session is revoked immediately; they log back
+  // in with their CURRENT password and the client forces the reset screen.
+  async flag_password_reset(u, p) {
+    if (!need(u, OWNER_ADMIN)) throw err("Only Owner or Admin can reset passwords");
+    if (!p.p_id) throw err("Member not found");
+    if (p.p_id === u.id) throw err("Use the Password option in the top bar to change your own password");
+    const target = (await q("select role from profiles where id=$1", [p.p_id])).rows[0];
+    if (!target) throw err("Member not found");
+    if (u.role === "admin" && target.role === "owner") throw err("Only an owner can reset an owner's password");
+    await tx(async (c) => {
+      await c.query("update profiles set must_reset_password=true where id=$1", [p.p_id]);
+      await c.query("update users set token_version=token_version+1 where id=$1", [p.p_id]);
+    });
     return null;
   },
 };

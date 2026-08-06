@@ -21,8 +21,13 @@ create table if not exists profiles (
   email      text,
   role       text not null default 'pending',
   agent_name text,
+  must_reset_password boolean not null default false,
   created_at timestamptz not null default now()
 );
+-- Owner/admin can force a member to choose a new password at next login. Lives on
+-- profiles (not users) so the frontend's profiles-row load surfaces it directly;
+-- the session revocation that makes it take effect uses users.token_version.
+alter table profiles add column if not exists must_reset_password boolean not null default false;
 
 -- ── reference / imported ────────────────────────────────────────────────
 create table if not exists agents (

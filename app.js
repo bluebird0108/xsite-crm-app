@@ -274,11 +274,11 @@ async function reloadAfterWrite(reload, label) {
 // ── auth ─────────────────────────────────────────────────
 async function resolveProfile(session) {
   if (!session) { state.profile = null; return; }
-  const result = await supabase.from("profiles").select("role, agent_name, full_name").eq("id", session.user.id).maybeSingle();
+  const result = await supabase.from("profiles").select("role, agent_name, full_name, must_reset_password").eq("id", session.user.id).maybeSingle();
   if (result.error) throw new Error(`Could not load your profile: ${result.error.message}`);
   const data = result.data;
   state.profile = data ? { ...data, id: session.user.id, email: session.user.email }
-    : { id: session.user.id, role: "pending", agent_name: null, full_name: "", email: session.user.email };
+    : { id: session.user.id, role: "pending", agent_name: null, full_name: "", must_reset_password: false, email: session.user.email };
 }
 
 let authLinkNotice = null;
@@ -367,6 +367,63 @@ function renderLogin(msg) {
   if (msg && msg.email) document.getElementById("email").value = msg.email;
 }
 
+// ── render: forced password reset ────────────────────────
+// Shown full-screen (no nav, no way out) when an owner/admin has flagged this
+// account. Setting a new password clears the flag and drops into the normal app.
+function renderForcePasswordReset() {
+  const p = state.profile || {};
+  root.innerHTML = `
+  <div class="login-shell">
+    <div class="login-panel">
+      <div class="login-brand">
+        <div class="login-brand-top">
+          <img class="login-logo" src="./xsite-logo.png" alt="Xsite Real Estate Brokers">
+          <p class="login-tagline">Honest. Reliable. <em>Professional.</em></p>
+        </div>
+        <p class="login-brand-foot">RERA Licensed · Dubai, UAE</p>
+      </div>
+      <div class="login-access">
+        <span class="login-kicker">Security</span>
+        <h1 class="login-title">Set a new password</h1>
+        <p class="login-intro">Your account was flagged to reset its password${p.full_name || p.email ? ` (${esc(p.full_name || p.email)})` : ""}. Choose a new password to continue.</p>
+        <div class="login-field">
+          <label for="fpr1">New password</label>
+          <input class="input" id="fpr1" type="password" autocomplete="new-password" placeholder="New password (min 8 characters)">
+        </div>
+        <div class="login-field" style="margin-top:14px">
+          <label for="fpr2">Confirm new password</label>
+          <input class="input" id="fpr2" type="password" autocomplete="new-password" placeholder="Re-enter new password">
+        </div>
+        <div class="login-actions">
+          <button class="btn btn-primary" id="fprsave" style="width:100%">Set new password</button>
+        </div>
+        <p class="login-msg" id="fprmsg"></p>
+        <p class="login-security-note">Authorized Xsite personnel only · Dubai, UAE</p>
+      </div>
+    </div>
+  </div>`;
+  document.getElementById("fprsave").onclick = submitForcedReset;
+  document.getElementById("fpr2").addEventListener("keydown", (e) => { if (e.key === "Enter") submitForcedReset(); });
+}
+
+async function submitForcedReset() {
+  const pw1 = document.getElementById("fpr1").value;
+  const pw2 = document.getElementById("fpr2").value;
+  const msg = document.getElementById("fprmsg");
+  const setErr = (t) => { msg.textContent = t; msg.className = "login-msg is-error"; };
+  if (pw1.length < 8) { setErr("Password must be at least 8 characters."); return; }
+  if (pw1 !== pw2) { setErr("The two passwords don't match."); return; }
+  const btn = document.getElementById("fprsave"); btn.disabled = true; btn.textContent = "Saving…";
+  const { error } = await supabase.auth.updateUser({ password: pw1 });
+  if (error) { setErr(error.message); btn.disabled = false; btn.textContent = "Set new password"; return; }
+  // change-password cleared the flag + re-issued a fresh token (stored by the
+  // shim). Reload the profile (now unflagged) and drop into the normal app.
+  const s = await supabase.auth.getSession();
+  try { await resolveProfile(s.data.session); await loadData(); }
+  catch (loadError) { state.fatalError = loadError.message; }
+  render();
+}
+
 async function signInPassword() {
   const email = document.getElementById("email").value.trim();
   const password = document.getElementById("password").value;
@@ -431,6 +488,9 @@ function navLink(screen, label) {
 }
 function renderApp() {
   const p = state.profile;
+  // An owner/admin-forced password reset takes over the whole screen before any
+  // role routing — the member cannot use the app until they choose a new password.
+  if (p && p.must_reset_password) { renderForcePasswordReset(); return; }
   const showTeam = roleIn("owner", "admin", "manager");
   const pendingTeam = state.team.filter((t) => t.role === "pending").length;
   const pendingRequests = state.requests.filter((request) => request.status === "pending").length;
@@ -1038,6 +1098,8 @@ function viewContractPrint() {
 // Owner role, so an admin cannot promote themselves or lock the owner out.
 function viewTeam() {
   const isOwner = roleIn("owner");
+  // Deleting an account and forcing a password reset are owner+admin only.
+  const canManageAuth = roleIn("owner", "admin");
   const agentNames = allLedgerNames();
   const assignable = isOwner ? ["pending", "agent", "accounts", "admin", "manager", "owner"] : ["pending", "agent", "accounts", "admin", "manager"];
   const roleOpts = (cur) => (assignable.includes(cur) ? assignable : [...assignable, cur])
@@ -1056,14 +1118,14 @@ function viewTeam() {
         : `<select class="input" data-role style="padding:7px 10px">${roleOpts(t.role)}</select>`}</td>
       <td>${locked ? "—" : `<select class="input" data-agentname style="padding:7px 10px">${agentOpts(t.agent_name)}</select>`}</td>
       <td style="white-space:nowrap">${locked ? "" : `<button class="btn btn-primary btn-mini" data-save>Save</button>
-        <button class="btn btn-secondary btn-mini" data-resetpw="${esc(t.email || "")}">Reset password</button>
-        ${t.id === state.profile.id ? "" : `<button class="btn btn-secondary btn-mini" data-removemember="${t.id}">Remove access</button>`}`}</td>
+        ${canManageAuth && t.id !== state.profile.id ? `<button class="btn btn-secondary btn-mini" data-resetpw="${t.id}">Reset password</button>` : ""}
+        ${t.id === state.profile.id ? "" : `<button class="btn btn-secondary btn-mini" data-removemember="${t.id}">Remove access</button>${canManageAuth ? `<button class="btn btn-mini" data-deletemember="${t.id}" style="background:#5a1f1f;color:#ffd9d2;border:1px solid #7a2a2a">Delete</button>` : ""}`}`}</td>
     </tr>`;
   }).join("");
   return `
   <div>
     <div style="margin-bottom:20px"><span class="card-kicker">${isOwner ? "Owner" : "Admin"} / Team</span><h1 style="margin-top:4px">Team &amp; Access</h1>
-    <p class="text-muted" style="margin:0">New signups appear here as <strong>pending</strong>. Assign a role to grant access; link agents to their ledger name. <strong>Reset password</strong> emails a secure link; <strong>Remove access</strong> returns the account to pending.${isOwner ? "" : " Owner accounts can only be changed by an owner."}</p></div>
+    <p class="text-muted" style="margin:0">New signups appear here as <strong>pending</strong>. Assign a role to grant access; link agents to their ledger name. <strong>Reset password</strong> signs the member out and makes them choose a new password at next login; <strong>Remove access</strong> returns the account to pending; <strong>Delete</strong> permanently removes the login (deal &amp; ledger history, linked by name, is kept).${isOwner ? "" : " Owner accounts can only be changed by an owner."}</p></div>
     <div class="sheet"><div class="sheet-hint">Everyone with an account · role changes apply immediately</div>
     <div class="table-wrap"><table class="grid">
       <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Assign role</th><th>Agent ledger link</th><th></th></tr></thead>
@@ -1073,16 +1135,36 @@ function viewTeam() {
   </div>`;
 }
 
-// Password recovery: we cannot set another person's password from the browser
-// (that needs a service-role key, which must never ship to a client), so the
-// owner/admin sends them a secure reset link instead.
-async function sendPasswordReset(email) {
+// There is no email on this app, so instead of a reset link we flag the account:
+// the member is signed out and must choose a new password at their next login.
+async function flagPasswordReset(uid) {
+  const target = state.team.find((m) => m.id === uid);
   const msg = document.getElementById("teammsg");
-  if (!email) { msg.textContent = "That account has no email address on file."; return; }
-  if (!window.confirm(`Send a password reset link to ${email}?`)) return;
-  msg.textContent = "Sending…";
-  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + window.location.pathname });
-  msg.textContent = error ? `Could not send: ${error.message}` : `Reset link sent to ${email}. They set a new password from that email.`;
+  if (!target) return;
+  if (target.id === state.profile.id) { msg.textContent = "Use the Password option in the top bar to change your own password."; return; }
+  if (!roleIn("owner") && target.role === "owner") { msg.textContent = "Only an owner can reset an owner's password."; return; }
+  if (!window.confirm(`Require ${target.full_name || target.email} to set a new password?\n\nThey'll be signed out and prompted to choose a new one the next time they log in. Their current password keeps working until then.`)) return;
+  msg.textContent = "Applying…";
+  const { error } = await supabase.rpc("flag_password_reset", { p_id: uid });
+  msg.textContent = error ? `Could not apply: ${error.message}` : `${target.full_name || target.email} will be asked to set a new password at next login.`;
+}
+
+// Permanently deletes the login (distinct from Remove access → pending). Deal and
+// ledger history is keyed by name, not by the login account, so it is kept.
+async function deleteMember(uid) {
+  const target = state.team.find((m) => m.id === uid);
+  const msg = document.getElementById("teammsg");
+  if (!target) return;
+  if (target.id === state.profile.id) { msg.textContent = "You cannot delete your own account."; return; }
+  if (!roleIn("owner") && target.role === "owner") { msg.textContent = "Only an owner can delete an owner."; return; }
+  if (target.role === "owner" && state.team.filter((m) => m.role === "owner").length <= 1) { msg.textContent = "The last owner cannot be deleted."; return; }
+  if (!window.confirm(`Permanently delete ${target.full_name || target.email}'s account?\n\nThis removes their login completely. Their deal and ledger history stays (it's linked by name, not by login).`)) return;
+  msg.textContent = "Deleting…";
+  const { error } = await supabase.rpc("delete_member", { p_id: uid });
+  if (error) { msg.textContent = `Could not delete: ${error.message}`; return; }
+  state.team = state.team.filter((m) => m.id !== uid);
+  msg.textContent = `${target.full_name || target.email}'s account was deleted.`;
+  const main = root.querySelector("main"); main.innerHTML = viewTeam(); wireScreen();
 }
 
 // Revokes every permission immediately by returning the account to "pending".
@@ -3904,8 +3986,9 @@ function wireScreen() {
   if (lq) lq.oninput = () => { state.ledgerQuery = lq.value; rerenderLedgers(); };
   root.querySelectorAll("[data-agent]").forEach((b) => b.onclick = () => { state.selectedAgent = b.dataset.agent; rerenderLedgers(); });
   root.querySelectorAll("[data-save]").forEach((b) => b.onclick = () => saveTeamRow(b.closest("tr")));
-  root.querySelectorAll("[data-resetpw]").forEach((b) => b.onclick = () => sendPasswordReset(b.dataset.resetpw));
+  root.querySelectorAll("[data-resetpw]").forEach((b) => b.onclick = () => flagPasswordReset(b.dataset.resetpw));
   root.querySelectorAll("[data-removemember]").forEach((b) => b.onclick = () => removeMember(b.dataset.removemember));
+  root.querySelectorAll("[data-deletemember]").forEach((b) => b.onclick = () => deleteMember(b.dataset.deletemember));
   const nd = document.getElementById("newdeal");
   if (nd) nd.onclick = () => { state.dealForm = emptyDealForm(); render(); };
   const exportTx = document.getElementById("exporttx"); if (exportTx) exportTx.onclick = exportTransactions;
