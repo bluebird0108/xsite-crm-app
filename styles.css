@@ -230,7 +230,7 @@ table.grid.wide td { padding: 7px 7px; font-size: 10.5px; }
 .staff-card.is-expiring::before { background: var(--sev-warn); }
 .staff-card.is-valid::before { background: var(--sev-ok); }
 .staff-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
-.staff-card-top { display: flex; align-items: flex-start; gap: 11px; }
+.staff-card-top { display: flex; align-items: flex-start; gap: 11px; flex-wrap: wrap; }
 .staff-avatar {
   width: 40px; height: 40px; border-radius: 50%; flex: none;
   display: flex; align-items: center; justify-content: center;
@@ -241,9 +241,8 @@ table.grid.wide td { padding: 7px 7px; font-size: 10.5px; }
 .staff-name { margin: 0; font-size: 15px; line-height: 1.18; letter-spacing: -.01em; }
 .staff-job { display: block; margin-top: 2px; color: var(--color-neutral-600); font-size: 12px; }
 .staff-menu {
-  position: absolute; top: var(--space-3); right: var(--space-3); z-index: 1;
-  opacity: 1; pointer-events: auto; transition: opacity 120ms ease;
-  background: color-mix(in srgb, #fff 88%, transparent); padding: 2px;
+  margin-left: auto; flex: none;
+  opacity: 1; pointer-events: auto; padding: 2px;
 }
 .staff-permit { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .permit-badge {
