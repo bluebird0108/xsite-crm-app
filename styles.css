@@ -242,10 +242,9 @@ table.grid.wide td { padding: 7px 7px; font-size: 10.5px; }
 .staff-job { display: block; margin-top: 2px; color: var(--color-neutral-600); font-size: 12px; }
 .staff-menu {
   position: absolute; top: var(--space-3); right: var(--space-3); z-index: 1;
-  opacity: 0; pointer-events: none; transition: opacity 120ms ease;
+  opacity: 1; pointer-events: auto; transition: opacity 120ms ease;
   background: color-mix(in srgb, #fff 88%, transparent); padding: 2px;
 }
-.staff-card:hover .staff-menu, .staff-card:focus-within .staff-menu { opacity: 1; pointer-events: auto; }
 .staff-permit { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .permit-badge {
   display: inline-block; padding: 4px 9px; font-size: 10px; font-weight: 800;
