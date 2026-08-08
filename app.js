@@ -2353,6 +2353,15 @@ async function saveReceiptDraft() {
 }
 
 // ── view: agent ledgers ──────────────────────────────────
+// How a commission was settled ("3600 Bank Transfer 600 Cash") is the source sheet's
+// Remarks column, which imports into deals.payment_method. The ledger renders
+// commission_entries, which has no such column, so it is looked up through the group_id
+// the two tables share.
+function paymentFor(entry) {
+  if (!entry || !entry.group_id) return "";
+  const deal = state.deals.find((d) => d.group_id === entry.group_id);
+  return (deal && deal.payment_method) || "";
+}
 // Every name the business knows about — staff roster, imported agents, and
 // anyone with commission history. A staff member with no deals yet still shows
 // up (with a zero ledger) so they can be linked to a login straight away.
@@ -2462,8 +2471,8 @@ function viewLedgers() {
     </div>
     <div class="sheet"><div class="sheet-hint">${esc(state.selectedAgent)} — ${monthLabel(state.ledgerMonth)} commission statement</div>
     <div class="table-wrap"><table class="grid wide">
-      <thead><tr><th>Date</th><th>Third party</th><th>Agent 2</th><th>Type</th><th>Unit</th><th>Building</th><th>Area</th><th>Annual value</th><th>Total commission</th><th>Received</th><th>VAT</th><th>Ex-VAT</th><th>Agent business</th><th>Xsite share</th><th>Agent share</th>${canEdit ? "<th></th>" : ""}</tr></thead>
-      <tbody>${rows.length ? rows.map((r) => `<tr><td>${esc(showDate(r.entry_date, r.entry_date_raw))}</td><td class="tp-cell">${esc(r.third_party || "—")}</td><td>${esc(r.agent2 || "—")}</td><td>${esc(r.deal_type)}</td><td class="unit-cell">${esc(r.unit)}</td><td>${esc(r.building)}</td><td>${esc(r.area)}</td><td class="numeric">${money(r.annual_value)}</td><td class="numeric">${money(r.total_commission)}</td><td class="numeric">${money(r.received)}</td><td class="numeric">${money(r.vat)}</td><td class="numeric">${money(r.commission_ex_vat)}</td><td class="numeric">${money(r.agent_business)}</td><td class="numeric">${money(r.xsite_share)}</td><td class="numeric">${money(r.agent_share)}</td>${canEdit ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editce="${r.id}">Edit</button><button class="btn btn-secondary btn-mini" data-delce="${r.id}">Delete</button></div></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canEdit ? 16 : 15}"><div class="md-empty" style="border:0">No commission entries yet for ${esc(state.selectedAgent)} — this ledger starts at zero.</div></td></tr>`}</tbody>
+      <thead><tr><th>Date</th><th>Third party</th><th>Agent 2</th><th>Type</th><th>Unit</th><th>Building</th><th>Area</th><th>Annual value</th><th>Total commission</th><th>Received</th><th>VAT</th><th>Ex-VAT</th><th>Agent business</th><th>Xsite share</th><th>Agent share</th><th>Payment / remarks</th>${canEdit ? "<th></th>" : ""}</tr></thead>
+      <tbody>${rows.length ? rows.map((r) => `<tr><td>${esc(showDate(r.entry_date, r.entry_date_raw))}</td><td class="tp-cell">${esc(r.third_party || "—")}</td><td>${esc(r.agent2 || "—")}</td><td>${esc(r.deal_type)}</td><td class="unit-cell">${esc(r.unit)}</td><td>${esc(r.building)}</td><td>${esc(r.area)}</td><td class="numeric">${money(r.annual_value)}</td><td class="numeric">${money(r.total_commission)}</td><td class="numeric">${money(r.received)}</td><td class="numeric">${money(r.vat)}</td><td class="numeric">${money(r.commission_ex_vat)}</td><td class="numeric">${money(r.agent_business)}</td><td class="numeric">${money(r.xsite_share)}</td><td class="numeric">${money(r.agent_share)}</td><td>${esc(paymentFor(r) || "—")}</td>${canEdit ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editce="${r.id}">Edit</button><button class="btn btn-secondary btn-mini" data-delce="${r.id}">Delete</button></div></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canEdit ? 17 : 16}"><div class="md-empty" style="border:0">No commission entries yet for ${esc(state.selectedAgent)} — this ledger starts at zero.</div></td></tr>`}</tbody>
     </table></div></div>` : `<div class="md-empty">No commission records to show.</div>`;
   return `
   <div>
@@ -2498,6 +2507,7 @@ function viewLedgerStatement() {
     <td>${esc(r.agent2 && r.agent2 !== "N/A" ? r.agent2 : "")}</td>
     <td>${esc(r.deal_type || "")}</td><td>${esc(r.unit || "")}</td><td>${esc(r.building || "")}</td><td>${esc(r.area || "")}</td>
     ${cell(r.annual_value)}${cell(r.total_commission)}${cell(r.received)}${cell(r.vat)}${cell(r.commission_ex_vat)}${cell(r.agent_business)}${cell(r.xsite_share)}${cell(r.agent_share)}
+    <td>${esc(paymentFor(r))}</td>
   </tr>`).join("");
   const summ = (label, val) => `<tr><td class="ls-sum-label">${label}</td><td class="ls-num">${num2(val)}</td></tr>`;
   return `<div class="ls-shell" role="dialog" aria-modal="true" aria-label="Commission statement" tabindex="-1">
@@ -2515,11 +2525,11 @@ function viewLedgerStatement() {
       <table class="ls-grid">
         <thead><tr>
           <th>S.NO</th><th>Date</th><th>Third Party</th><th>Agent 2</th><th>Rent/Sale/ Off Plan</th><th>Unit No</th><th>Building</th><th>Area</th>
-          <th>Annual Rent/ Sale Price</th><th>Total Commission Including 3rd Party</th><th>Commission Received</th><th>VAT@5%</th><th>Commission Exclusive Of VAT</th><th>Agent Business</th><th>Xsite Share@50%</th><th>Agent Share@50%</th>
+          <th>Annual Rent/ Sale Price</th><th>Total Commission Including 3rd Party</th><th>Commission Received</th><th>VAT@5%</th><th>Commission Exclusive Of VAT</th><th>Agent Business</th><th>Xsite Share</th><th>Agent Share</th><th>Remarks</th>
         </tr></thead>
-        <tbody>${body || `<tr><td colspan="16" style="text-align:center;padding:14px">No entries for this month.</td></tr>`}</tbody>
+        <tbody>${body || `<tr><td colspan="17" style="text-align:center;padding:14px">No entries for this month.</td></tr>`}</tbody>
         <tfoot><tr class="ls-total"><td colspan="8">Total</td>
-          <td class="ls-num">${num2(sum("annual_value"))}</td>${cell(sum("total_commission"))}${cell(received)}${cell(vat)}${cell(exVat)}${cell(agentBusiness)}${cell(xsite)}${cell(agentShare)}</tr></tfoot>
+          <td class="ls-num">${num2(sum("annual_value"))}</td>${cell(sum("total_commission"))}${cell(received)}${cell(vat)}${cell(exVat)}${cell(agentBusiness)}${cell(xsite)}${cell(agentShare)}<td></td></tr></tfoot>
       </table>
       <div class="ls-lower">
         <table class="ls-summary">
@@ -2637,7 +2647,10 @@ function exportDocuments() {
 }
 
 function exportLedger() {
-  const rows = state.commission.filter((r) => sameAgent(r.agent_name, state.selectedAgent) && (!state.ledgerMonth || r.month === state.ledgerMonth));
+  // payment_method comes from the paired deal, so fold it in before mapping columns.
+  const rows = state.commission
+    .filter((r) => sameAgent(r.agent_name, state.selectedAgent) && (!state.ledgerMonth || r.month === state.ledgerMonth))
+    .map((r) => ({ ...r, payment_method: paymentFor(r) }));
   const safeAgent = (state.selectedAgent || "agent").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   downloadCsv(`xsite-ledger-${safeAgent}-${state.ledgerMonth || "all"}.csv`, rows, [
     ["Date", "entry_date"], ["Agent", "agent_name"], ["Third party", "third_party"], ["Agent 2", "agent2"],
@@ -2645,6 +2658,7 @@ function exportLedger() {
     ["Annual value", "annual_value"], ["Total commission", "total_commission"], ["Received", "received"],
     ["VAT", "vat"], ["Commission ex-VAT", "commission_ex_vat"], ["Agent business", "agent_business"],
     ["Xsite share", "xsite_share"], ["Agent share", "agent_share"],
+    ["Payment / remarks", "payment_method"],
   ]);
 }
 
