@@ -1511,7 +1511,7 @@ function emptyDealForm() {
   return { groupId: null, editIds: [], deal_date: today, agent: "", agent2: "", third_party: "",
     deal_type: "Rent", unit: "", building: "", area: "", price: "", property_use: "Residential", total_commission: "",
     commission_received: "", vat: "", commission_ex_vat: "", agent_business: "",
-    company_share: "", agent_share: "", payment_method: "", tc_start: "", duration: "12",
+    company_share: "", agent_share: "", agent_split: DEFAULT_AGENT_SPLIT, payment_method: "", tc_start: "", duration: "12",
     tc_end: "", security_deposit: "", cheque_count: "", cheque_details: "", landlord: "", tenant: "", bank: "", msg: "" };
 }
 function dealFormFromRow(d) {
@@ -1525,6 +1525,9 @@ function dealFormFromRow(d) {
     total_commission: d.total_commission ?? "", commission_received: d.commission_received ?? "",
     vat: d.vat ?? "", commission_ex_vat: d.commission_ex_vat ?? "", agent_business: d.agent_business ?? "",
     company_share: d.company_share ?? "", agent_share: d.agent_share ?? "",
+    // Carry the deal's own split forward. Agents on a non-50/50 structure must keep it:
+    // without this, recalculating after a price edit would silently reset them to even.
+    agent_split: splitFromRow({ agent_business: d.agent_business, agent_share: d.agent_share }),
     payment_method: d.payment_method || "", tc_start: d.tc_start || "",
     duration: d.contract_duration || "12", tc_end: d.tc_end || "",
     security_deposit: d.security_deposit ?? "", cheque_count: d.cheque_count || "", cheque_details: d.cheque_details || "",
@@ -1561,9 +1564,10 @@ function viewDealModal() {
           ${field("vat", "VAT @ 5%", "number")}
           ${field("commission_ex_vat", "Commission ex-VAT", "number")}
           ${field("agent_business", "Agent business", "number")}
+          ${field("agent_split", "Agent commission %", "number")}
           <div class="field"></div>
-          ${field("company_share", "Company 50%", "number")}
-          ${field("agent_share", "Agent 50%", "number")}
+          ${field("company_share", "Company share", "number")}
+          ${field("agent_share", "Agent share", "number")}
           ${field("payment_method", "Payment / remarks")}
           <div class="form-section">Tenancy contract</div>
           ${field("tc_start", "TC start", "date")}
@@ -1590,7 +1594,7 @@ function collectDealForm() {
   const f = state.dealForm;
   ["deal_date","deal_type","unit","agent","agent2","third_party","building","area","price",
    "property_use","total_commission","commission_received","vat","commission_ex_vat","agent_business",
-   "company_share","agent_share","payment_method","tc_start","duration","tc_end",
+   "agent_split","company_share","agent_share","payment_method","tc_start","duration","tc_end",
    "security_deposit","cheque_count","cheque_details","bank","landlord","tenant"].forEach((k) => {
     const el = document.getElementById("f_" + k); if (el) f[k] = el.value;
   });
@@ -1603,7 +1607,9 @@ function dealAutoMath() {
   // VAT extracted out (total / 21), not added on top. All fields stay editable
   // afterwards. Received defaults to the full total (adjust when partial).
   const rate = f.property_use === "Commercial" ? 10 : 5;
-  const calculated = calculateDealCommissionFromRate(f.price, rate, !!f.agent2.trim());
+  // Preserve this deal's agreed split instead of forcing 50/50 — see agent_split above.
+  const split = String(f.agent_split ?? "").trim() === "" ? DEFAULT_AGENT_SPLIT : f.agent_split;
+  const calculated = calculateDealCommissionFromRate(f.price, rate, !!f.agent2.trim(), split);
   if (calculated) {
     f.total_commission = calculated.totalCommission;
     f.commission_received = calculated.totalCommission;
@@ -1612,8 +1618,9 @@ function dealAutoMath() {
     f.agent_business = calculated.agentBusiness;
     f.company_share = calculated.companyShare;
     f.agent_share = calculated.agentShare;
+    f.agent_split = calculated.agentSplitPercent;
   }
-  ["total_commission","commission_received","vat","commission_ex_vat","agent_business","company_share","agent_share"].forEach((k) => {
+  ["total_commission","commission_received","vat","commission_ex_vat","agent_business","agent_split","company_share","agent_share"].forEach((k) => {
     const el = document.getElementById("f_" + k); if (el) el.value = f[k];
   });
 }
@@ -2461,7 +2468,7 @@ function viewLedgers() {
   return `
   <div>
     <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
-      <div><span class="card-kicker">Accounts / Commissions</span><h1 style="margin-top:4px">${state.profile.role === "agent" ? "My Commission Ledger" : "Agent Commission Ledgers"}</h1><p class="text-muted" style="margin:0">${monthLabel(state.ledgerMonth)} statements with VAT and 50/50 share.</p></div>
+      <div><span class="card-kicker">Accounts / Commissions</span><h1 style="margin-top:4px">${state.profile.role === "agent" ? "My Commission Ledger" : "Agent Commission Ledgers"}</h1><p class="text-muted" style="margin:0">${monthLabel(state.ledgerMonth)} statements with VAT and agent share.</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary" id="exportledger">Export CSV</button><button class="btn btn-secondary" id="printledger">Print statement</button>${canEdit && state.selectedAgent ? `<button class="btn btn-primary" id="newledgerce">+ Add entry</button>` : ""}</div>
     </div>\n    <div class="tabs" style="margin-bottom:16px">${lmonthTabs}</div>
     <div class="ledger-layout">
@@ -2589,7 +2596,7 @@ async function emailAgentStatement() {
     `- VAT (5%): ${aed(sum("vat"))}`,
     `- Commission excl. VAT: ${aed(sum("commission_ex_vat"))}`,
     `- Agent business: ${aed(sum("agent_business"))}`,
-    `- Agent share (50%): ${aed(sum("agent_share"))}`, "",
+    `- Agent share: ${aed(sum("agent_share"))}`, "",
     "The detailed statement is attached.", "",
     "Xsite Real Estate Brokers",
   ].join("\r\n");
@@ -4316,7 +4323,7 @@ function wireModals() {
   const dca = document.getElementById("dealcancel"); if (dca) dca.onclick = () => { state.dealForm = null; render(); };
   const ds = document.getElementById("dealsave"); if (ds) ds.onclick = saveDeal;
   // Commission auto-calculates from price + property use (+ shared agent2).
-  ["f_price", "f_agent2"].forEach((id) => {
+  ["f_price", "f_agent2", "f_agent_split"].forEach((id) => {
     const el = document.getElementById(id); if (el) el.oninput = dealAutoMath;
   });
   const puEl = document.getElementById("f_property_use"); if (puEl) puEl.onchange = dealAutoMath;
