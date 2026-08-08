@@ -2400,6 +2400,10 @@ function viewLedgers() {
   const q = state.ledgerQuery.trim().toLowerCase();
   const teams = [...new Set(names.map(teamFor).filter(Boolean))].sort();
   const isAgent = state.profile.role === "agent";
+  // Accounts (and the owner) can correct the ledger in place instead of leaving for
+  // Accounts > Commission Entry. Same gate and same modal as that screen; the server
+  // re-checks it in save_commission_entry, so hiding the buttons is presentation only.
+  const canEdit = roleIn("owner", "accounts");
   // Commission received per agent for the active month — used to surface agents
   // who actually have activity (so the ledger never opens on an empty statement).
   const receivedFor = (name) => state.commission.reduce((s, r) =>
@@ -2451,14 +2455,14 @@ function viewLedgers() {
     </div>
     <div class="sheet"><div class="sheet-hint">${esc(state.selectedAgent)} — ${monthLabel(state.ledgerMonth)} commission statement</div>
     <div class="table-wrap"><table class="grid wide">
-      <thead><tr><th>Date</th><th>Third party</th><th>Agent 2</th><th>Type</th><th>Unit</th><th>Building</th><th>Area</th><th>Annual value</th><th>Total commission</th><th>Received</th><th>VAT</th><th>Ex-VAT</th><th>Agent business</th><th>Xsite share</th><th>Agent share</th></tr></thead>
-      <tbody>${rows.length ? rows.map((r) => `<tr><td>${esc(showDate(r.entry_date, r.entry_date_raw))}</td><td class="tp-cell">${esc(r.third_party || "—")}</td><td>${esc(r.agent2 || "—")}</td><td>${esc(r.deal_type)}</td><td class="unit-cell">${esc(r.unit)}</td><td>${esc(r.building)}</td><td>${esc(r.area)}</td><td class="numeric">${money(r.annual_value)}</td><td class="numeric">${money(r.total_commission)}</td><td class="numeric">${money(r.received)}</td><td class="numeric">${money(r.vat)}</td><td class="numeric">${money(r.commission_ex_vat)}</td><td class="numeric">${money(r.agent_business)}</td><td class="numeric">${money(r.xsite_share)}</td><td class="numeric">${money(r.agent_share)}</td></tr>`).join("") : `<tr><td colspan="15"><div class="md-empty" style="border:0">No commission entries yet for ${esc(state.selectedAgent)} — this ledger starts at zero.</div></td></tr>`}</tbody>
+      <thead><tr><th>Date</th><th>Third party</th><th>Agent 2</th><th>Type</th><th>Unit</th><th>Building</th><th>Area</th><th>Annual value</th><th>Total commission</th><th>Received</th><th>VAT</th><th>Ex-VAT</th><th>Agent business</th><th>Xsite share</th><th>Agent share</th>${canEdit ? "<th></th>" : ""}</tr></thead>
+      <tbody>${rows.length ? rows.map((r) => `<tr><td>${esc(showDate(r.entry_date, r.entry_date_raw))}</td><td class="tp-cell">${esc(r.third_party || "—")}</td><td>${esc(r.agent2 || "—")}</td><td>${esc(r.deal_type)}</td><td class="unit-cell">${esc(r.unit)}</td><td>${esc(r.building)}</td><td>${esc(r.area)}</td><td class="numeric">${money(r.annual_value)}</td><td class="numeric">${money(r.total_commission)}</td><td class="numeric">${money(r.received)}</td><td class="numeric">${money(r.vat)}</td><td class="numeric">${money(r.commission_ex_vat)}</td><td class="numeric">${money(r.agent_business)}</td><td class="numeric">${money(r.xsite_share)}</td><td class="numeric">${money(r.agent_share)}</td>${canEdit ? `<td><div class="row-actions"><button class="btn btn-secondary btn-mini" data-editce="${r.id}">Edit</button><button class="btn btn-secondary btn-mini" data-delce="${r.id}">Delete</button></div></td>` : ""}</tr>`).join("") : `<tr><td colspan="${canEdit ? 16 : 15}"><div class="md-empty" style="border:0">No commission entries yet for ${esc(state.selectedAgent)} — this ledger starts at zero.</div></td></tr>`}</tbody>
     </table></div></div>` : `<div class="md-empty">No commission records to show.</div>`;
   return `
   <div>
     <div style="margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap">
       <div><span class="card-kicker">Accounts / Commissions</span><h1 style="margin-top:4px">${state.profile.role === "agent" ? "My Commission Ledger" : "Agent Commission Ledgers"}</h1><p class="text-muted" style="margin:0">${monthLabel(state.ledgerMonth)} statements with VAT and 50/50 share.</p></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary" id="exportledger">Export CSV</button><button class="btn btn-secondary" id="printledger">Print statement</button></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary" id="exportledger">Export CSV</button><button class="btn btn-secondary" id="printledger">Print statement</button>${canEdit && state.selectedAgent ? `<button class="btn btn-primary" id="newledgerce">+ Add entry</button>` : ""}</div>
     </div>\n    <div class="tabs" style="margin-bottom:16px">${lmonthTabs}</div>
     <div class="ledger-layout">
       <aside class="ledger-panel">
@@ -3824,20 +3828,38 @@ function viewCommissionEntry() {
   </div>`;
 }
 
+// `month` is the reporting period the entry belongs to — the commission sheet or ledger
+// month being worked in, not the entry date. Callers set it from the screen they opened
+// the form on; editing keeps whatever the row already had so a correction never re-files
+// the row into a different month.
+// agent_split is the agent's percentage of the agent business. Most agents are on 50,
+// but freelancers and negotiated structures are not, so it is editable and is used only
+// to drive the auto-calculation — the stored figures are always xsite_share/agent_share.
+const DEFAULT_AGENT_SPLIT = 50;
+// Recover the split an existing row was written with, so editing a non-50/50 agent's
+// entry does not silently snap it back to an even split when the price is recalculated.
+function splitFromRow(r) {
+  const bus = Number(r.agent_business);
+  const share = Number(r.agent_share);
+  if (!Number.isFinite(bus) || !Number.isFinite(share) || bus <= 0) return DEFAULT_AGENT_SPLIT;
+  return Math.round((share / bus) * 1000) / 10;
+}
 function emptyCeForm() {
-  return { id: null, agent_name: "", agent2: "", entry_date: todayIso(), deal_type: "Rent", third_party: "",
+  return { id: null, month: null, agent_name: "", agent2: "", entry_date: todayIso(), deal_type: "Rent", third_party: "",
     unit: "", building: "", area: "", annual_value: "", property_use: "Residential", total_commission: "", received: "",
-    vat: "", commission_ex_vat: "", agent_business: "", xsite_share: "", agent_share: "", msg: "" };
+    vat: "", commission_ex_vat: "", agent_business: "", xsite_share: "", agent_share: "",
+    agent_split: DEFAULT_AGENT_SPLIT, msg: "" };
 }
 function ceFormFromRow(r) {
-  return { id: r.id, agent_name: r.agent_name || "", agent2: r.agent2 === "N/A" ? "" : (r.agent2 || ""),
+  return { id: r.id, month: r.month || null, agent_name: r.agent_name || "", agent2: r.agent2 === "N/A" ? "" : (r.agent2 || ""),
     entry_date: r.entry_date || todayIso(), deal_type: r.deal_type || "Rent",
     third_party: r.third_party === "N/A" ? "" : (r.third_party || ""),
     unit: r.unit || "", building: r.building || "", area: r.area || "", annual_value: r.annual_value ?? "",
     property_use: r.property_use || "Residential",
     total_commission: r.total_commission ?? "", received: r.received ?? "", vat: r.vat ?? "",
     commission_ex_vat: r.commission_ex_vat ?? "", agent_business: r.agent_business ?? "",
-    xsite_share: r.xsite_share ?? "", agent_share: r.agent_share ?? "", msg: "" };
+    xsite_share: r.xsite_share ?? "", agent_share: r.agent_share ?? "",
+    agent_split: splitFromRow(r), msg: "" };
 }
 
 function viewCeModal() {
@@ -3866,9 +3888,10 @@ function viewCeModal() {
         ${fld("vat", "VAT @ 5%", "number", 'step="0.01"')}
         ${fld("commission_ex_vat", "Ex-VAT", "number", 'step="0.01"')}
         ${fld("agent_business", "Agent business", "number", 'step="0.01"')}
+        ${fld("agent_split", "Agent commission %", "number", 'min="0" max="100" step="0.1"')}
         <div class="field"></div>
-        ${fld("xsite_share", "Xsite 50%", "number", 'step="0.01"')}
-        ${fld("agent_share", "Agent 50%", "number", 'step="0.01"')}
+        ${fld("xsite_share", "Xsite share", "number", 'step="0.01"')}
+        ${fld("agent_share", "Agent share", "number", 'step="0.01"')}
       </div>
       <div class="modal-actions"><span class="form-msg" id="cemsg">${esc(f.msg || "")}</span>
         <button class="btn btn-secondary" id="cecancel">Cancel</button>
@@ -3879,7 +3902,7 @@ function viewCeModal() {
 function collectCeForm() {
   const f = state.ceForm; if (!f) return;
   ["agent_name","agent2","entry_date","deal_type","third_party","unit","building","area","annual_value","property_use",
-   "total_commission","received","vat","commission_ex_vat","agent_business","xsite_share","agent_share"]
+   "total_commission","received","vat","commission_ex_vat","agent_business","agent_split","xsite_share","agent_share"]
     .forEach((k) => { const el = document.getElementById("ce_" + k); if (el) f[k] = el.value; });
 }
 function ceAutoMath() {
@@ -3889,12 +3912,16 @@ function ceAutoMath() {
   // Commercial 10%) IS the VAT-inclusive total; VAT is extracted out (total / 21),
   // not added on top. Received defaults to the full total.
   const rate = f.property_use === "Commercial" ? 10 : 5;
-  const calc = calculateDealCommissionFromRate(f.annual_value, rate, !!String(f.agent2).trim());
+  // The agent's cut defaults to 50 but is editable — several agents are on other
+  // structures, so the split drives the two share figures rather than being assumed.
+  const split = String(f.agent_split).trim() === "" ? DEFAULT_AGENT_SPLIT : f.agent_split;
+  const calc = calculateDealCommissionFromRate(f.annual_value, rate, !!String(f.agent2).trim(), split);
   if (!calc) return;
   f.total_commission = calc.totalCommission; f.received = calc.totalCommission;
   f.vat = calc.vat; f.commission_ex_vat = calc.commissionExVat; f.agent_business = calc.agentBusiness;
   f.xsite_share = calc.companyShare; f.agent_share = calc.agentShare;
-  ["total_commission","received","vat","commission_ex_vat","agent_business","xsite_share","agent_share"].forEach((k) => {
+  f.agent_split = calc.agentSplitPercent;
+  ["total_commission","received","vat","commission_ex_vat","agent_business","agent_split","xsite_share","agent_share"].forEach((k) => {
     const el = document.getElementById("ce_" + k); if (el) el.value = f[k];
   });
 }
@@ -3909,6 +3936,9 @@ async function saveCommissionEntry() {
   const btn = document.getElementById("cesave"); btn.disabled = true; btn.textContent = "Saving…";
   const args = {
     p_id: f.id, p_agent_name: String(f.agent_name).trim().toUpperCase(), p_entry_date: f.entry_date,
+    // Reporting period, not the deal date. The server falls back to the entry date's
+    // month only if this is absent.
+    p_month: f.month || null,
     p_third_party: f.third_party || null, p_agent2: f.agent2 || null, p_deal_type: f.deal_type,
     p_unit: f.unit || null, p_building: f.building || null, p_area: f.area || null,
     p_property_use: f.property_use || "Residential",
@@ -3916,34 +3946,13 @@ async function saveCommissionEntry() {
     p_vat: num(f.vat), p_commission_ex_vat: num(f.commission_ex_vat), p_agent_business: num(f.agent_business),
     p_xsite_share: num(f.xsite_share), p_agent_share: num(f.agent_share),
   };
-  let error = null;
-  const rpc = await supabase.rpc("save_commission_entry", args);
-  // Fall back when the function is missing OR when it carries the old bug of
-  // minting a group_id without its deal_groups parent (FK violation).
-  if (rpc.error && /function|does not exist|schema cache|foreign key|deal_groups|group_id/i.test(rpc.error.message)) {
-    const row = {
-      agent_name: args.p_agent_name, entry_date: args.p_entry_date, month: args.p_entry_date.slice(0, 7),
-      third_party: args.p_third_party || "N/A", agent2: args.p_agent2 || "N/A", deal_type: args.p_deal_type,
-      unit: args.p_unit, building: args.p_building, area: args.p_area, annual_value: args.p_annual_value,
-      property_use: args.p_property_use, total_commission: args.p_total_commission, received: args.p_received, vat: args.p_vat,
-      commission_ex_vat: args.p_commission_ex_vat, agent_business: args.p_agent_business,
-      xsite_share: args.p_xsite_share, agent_share: args.p_agent_share,
-    };
-    if (f.id) ({ error } = await supabase.from("commission_entries").update(row).eq("id", f.id));
-    else {
-      // group_id references deal_groups, so mint the parent row first.
-      const gid = crypto.randomUUID();
-      const parent = await supabase.from("deal_groups").insert({ id: gid });
-      if (parent.error) {
-        error = { message: "Commission entries need the database update (db/migrations/…040000) — ask the owner to run it. (" + parent.error.message + ")" };
-      } else {
-        ({ error } = await supabase.from("commission_entries").insert({ ...row, group_id: gid }));
-      }
-    }
-  } else error = rpc.error;
+  // No direct-table fallback: save_commission_entry keeps commission_entries, deals and
+  // deal_groups 1:1 inside one transaction. Writing the tables straight from here skipped
+  // the deals row and derived month from the entry date, which is what this replaced.
+  const { error } = await supabase.rpc("save_commission_entry", args);
   if (error) { msg.textContent = error.message; btn.disabled = false; btn.textContent = f.id ? "Save changes" : "Save entry"; return; }
   if (!await reloadAfterWrite(reloadDeals, "Commission entry")) return;
-  state.ceMonth = f.entry_date.slice(0, 7);
+  state.ceMonth = args.p_month || f.entry_date.slice(0, 7);
   state.ceForm = null;
   render();
 }
@@ -3951,11 +3960,9 @@ async function saveCommissionEntry() {
 async function deleteCommissionEntry(id) {
   const r = state.commission.find((x) => x.id === id);
   if (!r || !window.confirm(`Delete this ${money(r.received)} entry for ${r.agent_name}?`)) return;
-  let error = null;
-  const rpc = await supabase.rpc("delete_commission_entry", { p_id: id });
-  if (rpc.error && /function|does not exist|schema cache/i.test(rpc.error.message)) {
-    ({ error } = await supabase.from("commission_entries").delete().eq("id", id));
-  } else error = rpc.error;
+  // No direct-table fallback: the RPC removes the entry, its deal and the deal_groups
+  // parent together. Deleting only commission_entries here would strand the deal.
+  const { error } = await supabase.rpc("delete_commission_entry", { p_id: id });
   if (error) { window.alert("Could not delete: " + error.message); return; }
   if (!await reloadAfterWrite(reloadDeals, "Commission entry deletion")) return;
   render();
@@ -4263,7 +4270,14 @@ function wireScreen() {
   root.querySelectorAll("[data-files]").forEach((b) => b.onclick = () => { state.filesFor = { contractId: b.dataset.files, msg: "" }; render(); });
   root.querySelectorAll("[data-openfile]").forEach((b) => b.onclick = () => openContractFile(b.dataset.openfile));
   // commission entry
-  const newCe = document.getElementById("newce"); if (newCe) newCe.onclick = () => { state.ceForm = emptyCeForm(); render(); };
+  const newCe = document.getElementById("newce"); if (newCe) newCe.onclick = () => { state.ceForm = { ...emptyCeForm(), month: state.ceMonth }; render(); };
+  // Same modal, opened from an agent's ledger: agent and reporting month come from the
+  // ledger being viewed, so accounts can post straight into the statement in front of them.
+  const newLedgerCe = document.getElementById("newledgerce");
+  if (newLedgerCe) newLedgerCe.onclick = () => {
+    state.ceForm = { ...emptyCeForm(), agent_name: state.selectedAgent || "", month: state.ledgerMonth };
+    render();
+  };
   root.querySelectorAll("[data-cemonth]").forEach((b) => b.onclick = () => { state.ceMonth = b.dataset.cemonth; render(); });
   root.querySelectorAll("[data-editce]").forEach((b) => b.onclick = () => {
     const r = state.commission.find((x) => x.id === b.dataset.editce);
@@ -4381,7 +4395,7 @@ function wireModals() {
   const ceClose = document.getElementById("ceclose"); if (ceClose) ceClose.onclick = () => { state.ceForm = null; render(); };
   const ceCancel = document.getElementById("cecancel"); if (ceCancel) ceCancel.onclick = () => { state.ceForm = null; render(); };
   const ceSave = document.getElementById("cesave"); if (ceSave) ceSave.onclick = saveCommissionEntry;
-  ["ce_annual_value", "ce_agent2"].forEach((id) => {
+  ["ce_annual_value", "ce_agent2", "ce_agent_split"].forEach((id) => {
     const el = document.getElementById(id); if (el) el.oninput = ceAutoMath;
   });
   const cePuEl = document.getElementById("ce_property_use"); if (cePuEl) cePuEl.onchange = ceAutoMath;

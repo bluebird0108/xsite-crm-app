@@ -52,18 +52,26 @@ export function calculateDealCommission(totalCommission, commissionReceived, sha
 // 10% commercial. price × rate IS the total commission, VAT-inclusive — VAT is
 // extracted out of it (total / 21 = the 5% VAT component), NOT added on top.
 // Shares are computed from the ex-VAT base, halved again for a shared deal.
-export function calculateDealCommissionFromRate(price, ratePercent, shared = false) {
+// agentSplitPercent is the agent's cut of the agent business. It defaults to 50, but not
+// every agent is on an even split — freelancers and individually negotiated structures
+// (e.g. 80/20 or 70/30) appear throughout the commission sheets, so the caller can pass
+// the agreed figure. The company share is taken as the remainder rather than computed
+// separately, so the two always add up to the agent business exactly.
+export function calculateDealCommissionFromRate(price, ratePercent, shared = false, agentSplitPercent = 50) {
   const p = Number(price);
   const rate = Number(ratePercent);
   if (!Number.isFinite(p) || !Number.isFinite(rate) || p <= 0 || rate <= 0) return null;
+
+  const rawSplit = Number(agentSplitPercent);
+  const split = Number.isFinite(rawSplit) ? Math.min(100, Math.max(0, rawSplit)) : 50;
 
   const totalCommission = roundMoney((p * rate) / 100);
   const vat = roundMoney(totalCommission / 21);
   const commissionExVat = roundMoney(totalCommission - vat);
   const agentBusiness = roundMoney(shared ? commissionExVat / 2 : commissionExVat);
-  const companyShare = roundMoney(agentBusiness / 2);
-  const agentShare = roundMoney(agentBusiness / 2);
-  return { totalCommission, vat, commissionExVat, agentBusiness, companyShare, agentShare };
+  const agentShare = roundMoney((agentBusiness * split) / 100);
+  const companyShare = roundMoney(agentBusiness - agentShare);
+  return { totalCommission, vat, commissionExVat, agentBusiness, companyShare, agentShare, agentSplitPercent: split };
 }
 
 export function calculateContractEnd(startIso, durationMonths) {

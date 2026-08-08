@@ -56,10 +56,19 @@ const HANDLERS = {
   },
 
   // ── commission entries ─────────────────────────────────────────────
+  // A commission entry and its deal are one record split across two tables, joined by
+  // group_id, and are kept 1:1:1 with deal_groups. Writing only commission_entries would
+  // hide the commission from the Master Sheet (which reads deals) and break that
+  // relationship, so every path below touches both tables inside one transaction.
+  //
+  // `month` is the reporting period of the commission sheet / ledger being worked in, NOT
+  // the deal date — a deal closed 23 June that settles on the July sheet reports under
+  // 2026-07. Callers pass p_month; ym(entry_date) is only a fallback for older callers.
   async save_commission_entry(u, p) {
     if (!need(u, MONEY)) throw err("Only Owner or Accounts can record commission entries");
+    const month = p.p_month || ym(p.p_entry_date);
     const row = {
-      agent_name: p.p_agent_name, entry_date: p.p_entry_date, month: ym(p.p_entry_date),
+      agent_name: p.p_agent_name, entry_date: p.p_entry_date, month,
       third_party: p.p_third_party, agent2: p.p_agent2, deal_type: p.p_deal_type,
       unit: p.p_unit, building: p.p_building, area: p.p_area, annual_value: p.p_annual_value,
       property_use: p.p_property_use || "Residential",
@@ -67,21 +76,54 @@ const HANDLERS = {
       commission_ex_vat: p.p_commission_ex_vat, agent_business: p.p_agent_business,
       xsite_share: p.p_xsite_share, agent_share: p.p_agent_share,
     };
+    // Same record, in `deals` column names. Fields only `deals` carries (sno, tenancy
+    // contract dates, landlord/tenant, bank, payment_method) stay NULL — the entry form
+    // does not collect them, exactly as for rows imported from agent workbooks.
+    const dealRow = {
+      agent: row.agent_name, deal_date: row.entry_date, month,
+      third_party: row.third_party, agent2: row.agent2, deal_type: row.deal_type,
+      unit: row.unit, building: row.building, area: row.area, price: row.annual_value,
+      property_use: row.property_use,
+      total_commission: row.total_commission, commission_received: row.received, vat: row.vat,
+      commission_ex_vat: row.commission_ex_vat, agent_business: row.agent_business,
+      company_share: row.xsite_share, agent_share: row.agent_share,
+    };
     return tx(async (c) => {
       if (p.p_id) {
         const { text, values } = sqlUpdate("commission_entries", row, { id: p.p_id });
-        await c.query(text, values);
+        const updated = (await c.query(text, values)).rows[0];
+        if (!updated) throw err("Commission entry not found");
+        // Keep the paired deal in step. Older ledger-only entries may have no deal row;
+        // create one so editing repairs the pairing rather than leaving it broken.
+        const gid = updated.group_id;
+        if (!gid) throw err("Commission entry has no deal group");
+        const d = sqlUpdate("deals", dealRow, { group_id: gid });
+        // buildWhere silently drops keys it does not recognise, which would leave this
+        // UPDATE unscoped and rewrite every deal. Refuse rather than trust that.
+        if (!/\bwhere\b/i.test(d.text)) throw err("Refusing unscoped deal update");
+        const n = (await c.query(d.text, d.values)).rowCount;
+        if (!n) await ins(c, "deals", dealRow, { group_id: gid });
       } else {
         const g = (await c.query("insert into deal_groups default values returning id")).rows[0].id;
         await ins(c, "commission_entries", row, { group_id: g });
+        await ins(c, "deals", dealRow, { group_id: g });
       }
       return null;
     });
   },
+  // Removes the whole record - entry, its deal, and the deal_groups parent - so the three
+  // tables stay 1:1:1. Deleting only the entry would strand a deal on the Master Sheet.
   async delete_commission_entry(u, p) {
     if (!need(u, MONEY)) throw err("Only Owner or Accounts can delete commission entries");
-    await q("delete from commission_entries where id=$1", [p.p_id]);
-    return null;
+    return tx(async (c) => {
+      const row = (await c.query("select group_id from commission_entries where id=$1", [p.p_id])).rows[0];
+      await c.query("delete from commission_entries where id=$1", [p.p_id]);
+      if (row && row.group_id) {
+        await c.query("delete from deals where group_id=$1", [row.group_id]);
+        await c.query("delete from deal_groups where id=$1", [row.group_id]);
+      }
+      return null;
+    });
   },
 
   // ── contracts ──────────────────────────────────────────────────────
