@@ -3832,10 +3832,23 @@ function viewCommissionEntry() {
 // month being worked in, not the entry date. Callers set it from the screen they opened
 // the form on; editing keeps whatever the row already had so a correction never re-files
 // the row into a different month.
+// agent_split is the agent's percentage of the agent business. Most agents are on 50,
+// but freelancers and negotiated structures are not, so it is editable and is used only
+// to drive the auto-calculation — the stored figures are always xsite_share/agent_share.
+const DEFAULT_AGENT_SPLIT = 50;
+// Recover the split an existing row was written with, so editing a non-50/50 agent's
+// entry does not silently snap it back to an even split when the price is recalculated.
+function splitFromRow(r) {
+  const bus = Number(r.agent_business);
+  const share = Number(r.agent_share);
+  if (!Number.isFinite(bus) || !Number.isFinite(share) || bus <= 0) return DEFAULT_AGENT_SPLIT;
+  return Math.round((share / bus) * 1000) / 10;
+}
 function emptyCeForm() {
   return { id: null, month: null, agent_name: "", agent2: "", entry_date: todayIso(), deal_type: "Rent", third_party: "",
     unit: "", building: "", area: "", annual_value: "", property_use: "Residential", total_commission: "", received: "",
-    vat: "", commission_ex_vat: "", agent_business: "", xsite_share: "", agent_share: "", msg: "" };
+    vat: "", commission_ex_vat: "", agent_business: "", xsite_share: "", agent_share: "",
+    agent_split: DEFAULT_AGENT_SPLIT, msg: "" };
 }
 function ceFormFromRow(r) {
   return { id: r.id, month: r.month || null, agent_name: r.agent_name || "", agent2: r.agent2 === "N/A" ? "" : (r.agent2 || ""),
@@ -3845,7 +3858,8 @@ function ceFormFromRow(r) {
     property_use: r.property_use || "Residential",
     total_commission: r.total_commission ?? "", received: r.received ?? "", vat: r.vat ?? "",
     commission_ex_vat: r.commission_ex_vat ?? "", agent_business: r.agent_business ?? "",
-    xsite_share: r.xsite_share ?? "", agent_share: r.agent_share ?? "", msg: "" };
+    xsite_share: r.xsite_share ?? "", agent_share: r.agent_share ?? "",
+    agent_split: splitFromRow(r), msg: "" };
 }
 
 function viewCeModal() {
@@ -3874,9 +3888,10 @@ function viewCeModal() {
         ${fld("vat", "VAT @ 5%", "number", 'step="0.01"')}
         ${fld("commission_ex_vat", "Ex-VAT", "number", 'step="0.01"')}
         ${fld("agent_business", "Agent business", "number", 'step="0.01"')}
+        ${fld("agent_split", "Agent commission %", "number", 'min="0" max="100" step="0.1"')}
         <div class="field"></div>
-        ${fld("xsite_share", "Xsite 50%", "number", 'step="0.01"')}
-        ${fld("agent_share", "Agent 50%", "number", 'step="0.01"')}
+        ${fld("xsite_share", "Xsite share", "number", 'step="0.01"')}
+        ${fld("agent_share", "Agent share", "number", 'step="0.01"')}
       </div>
       <div class="modal-actions"><span class="form-msg" id="cemsg">${esc(f.msg || "")}</span>
         <button class="btn btn-secondary" id="cecancel">Cancel</button>
@@ -3887,7 +3902,7 @@ function viewCeModal() {
 function collectCeForm() {
   const f = state.ceForm; if (!f) return;
   ["agent_name","agent2","entry_date","deal_type","third_party","unit","building","area","annual_value","property_use",
-   "total_commission","received","vat","commission_ex_vat","agent_business","xsite_share","agent_share"]
+   "total_commission","received","vat","commission_ex_vat","agent_business","agent_split","xsite_share","agent_share"]
     .forEach((k) => { const el = document.getElementById("ce_" + k); if (el) f[k] = el.value; });
 }
 function ceAutoMath() {
@@ -3897,12 +3912,16 @@ function ceAutoMath() {
   // Commercial 10%) IS the VAT-inclusive total; VAT is extracted out (total / 21),
   // not added on top. Received defaults to the full total.
   const rate = f.property_use === "Commercial" ? 10 : 5;
-  const calc = calculateDealCommissionFromRate(f.annual_value, rate, !!String(f.agent2).trim());
+  // The agent's cut defaults to 50 but is editable — several agents are on other
+  // structures, so the split drives the two share figures rather than being assumed.
+  const split = String(f.agent_split).trim() === "" ? DEFAULT_AGENT_SPLIT : f.agent_split;
+  const calc = calculateDealCommissionFromRate(f.annual_value, rate, !!String(f.agent2).trim(), split);
   if (!calc) return;
   f.total_commission = calc.totalCommission; f.received = calc.totalCommission;
   f.vat = calc.vat; f.commission_ex_vat = calc.commissionExVat; f.agent_business = calc.agentBusiness;
   f.xsite_share = calc.companyShare; f.agent_share = calc.agentShare;
-  ["total_commission","received","vat","commission_ex_vat","agent_business","xsite_share","agent_share"].forEach((k) => {
+  f.agent_split = calc.agentSplitPercent;
+  ["total_commission","received","vat","commission_ex_vat","agent_business","agent_split","xsite_share","agent_share"].forEach((k) => {
     const el = document.getElementById("ce_" + k); if (el) el.value = f[k];
   });
 }
@@ -4376,7 +4395,7 @@ function wireModals() {
   const ceClose = document.getElementById("ceclose"); if (ceClose) ceClose.onclick = () => { state.ceForm = null; render(); };
   const ceCancel = document.getElementById("cecancel"); if (ceCancel) ceCancel.onclick = () => { state.ceForm = null; render(); };
   const ceSave = document.getElementById("cesave"); if (ceSave) ceSave.onclick = saveCommissionEntry;
-  ["ce_annual_value", "ce_agent2"].forEach((id) => {
+  ["ce_annual_value", "ce_agent2", "ce_agent_split"].forEach((id) => {
     const el = document.getElementById(id); if (el) el.oninput = ceAutoMath;
   });
   const cePuEl = document.getElementById("ce_property_use"); if (cePuEl) cePuEl.onchange = ceAutoMath;
